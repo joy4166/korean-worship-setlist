@@ -1,0 +1,32 @@
+[project]
+name = "korean-worship-setlist"
+version = "0.1.0"
+description = "Korean church worship setlist planner, harmony/tempo optimizer, and sheet song-form stamper skill."
+license = { text = "MIT AND OFL-1.1" }
+readme = "SKILL.md"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    "numpy>=1.26",
+    "pillow>=10.0",
+    "pypdf>=4.0",
+    "pypdfium2>=4.25",
+    "reportlab>=4.0",
+]
+
+[project.optional-dependencies]
+embeddings = [
+    "sentence-transformers>=3.0.0",
+]
+builder = [
+    "yt-dlp>=2024.8.0",
+    "librosa>=0.10.2",
+    "soundfile>=0.12.1",
+    "imageio-ffmpeg>=0.5.1",
+]
+dev = [
+    "pytest>=8.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["scripts"]

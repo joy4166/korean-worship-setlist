@@ -1,0 +1,13 @@
+# Python & virtual environment
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Local church-specific data (never distribute)
+data/church_local.db*
+data/user_config.json
+data/_cache/
+
+# Generated outputs
+output/

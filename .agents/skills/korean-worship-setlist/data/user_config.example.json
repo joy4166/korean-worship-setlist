@@ -1,0 +1,29 @@
+{
+  "config_schema": 1,
+  "team_name": "청년부 찬양팀",
+  "church_scale": "medium",
+  "congregation_age_group": "youth_young_adult",
+  "leader_gender": "male",
+  "vocal_floor": "A2",
+  "vocal_ceiling": "F#4",
+  "vocal_ensemble": "small_team",
+  "default_session": "full_band",
+  "session_instruments": [
+    "piano",
+    "synth_pad",
+    "acoustic_guitar",
+    "electric_guitar",
+    "bass",
+    "drums"
+  ],
+  "session_skill_tier": "intermediate",
+  "seeker_emphasis": false,
+  "cooldown_weeks": 6,
+  "familiar_ratio": 0.75,
+  "show_capo": false,
+  "lock_past_keys": false,
+  "local_sheet_dirs": [
+    "sheet"
+  ],
+  "default_output_dir": "output"
+}

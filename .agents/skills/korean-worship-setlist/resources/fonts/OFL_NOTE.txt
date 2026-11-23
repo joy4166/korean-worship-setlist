@@ -1,0 +1,8 @@
+Font: NotoSansKR-VF.ttf
+Source: Windows system font directory (originally Google Fonts Noto Sans Korean)
+License: SIL Open Font License, Version 1.1 (OFL-1.1)
+Copyright: Copyright 2014-2023 The Noto Project Authors (https://github.com/notofonts/noto-cjk)
+
+This font is bundled inside the skill's resources/fonts/ directory so sheet-music
+header stamping renders Korean characters reliably across systems regardless of
+local OS font configuration.
