@@ -972,6 +972,138 @@ def test_skill_update_notifier_throttling_offline_safety_and_cli_update(
     assert (dest_skill / "data" / "church_local.db").read_bytes() == b"KEEP_LOCAL_DB"
 
 
+def test_tempo_classification_semantics_and_catalog_mood_genre_accuracy() -> None:
+    import analyze_audio
+    import build_bulk_catalog
+
+    # 1. classify_tempo_tier across meters and grooves
+    assert analyze_audio.classify_tempo_tier(74, "4/4") == "ballad"
+    assert analyze_audio.classify_tempo_tier(100, "4/4") == "medium"
+    assert analyze_audio.classify_tempo_tier(100, "4/4", groove_hint="16th_upbeat") == "fast"
+    assert analyze_audio.classify_tempo_tier(110, "4/4") == "fast"
+
+    assert analyze_audio.classify_tempo_tier(78, "3/4") == "ballad"
+    assert analyze_audio.classify_tempo_tier(96, "3/4") == "medium"
+    assert analyze_audio.classify_tempo_tier(116, "3/4") == "fast"
+
+    for compound in ("6/8", "9/8", "12/8"):
+        assert analyze_audio.classify_tempo_tier(58, compound) == "ballad"
+        assert analyze_audio.classify_tempo_tier(74, compound) == "medium"
+        assert analyze_audio.classify_tempo_tier(88, compound) == "fast"
+
+    # 2. correct_bpm_and_classify trusted_bpm & half/double/triple recovery
+    trusted = analyze_audio.correct_bpm_and_classify(134.0, time_signature="4/4", slot_hint="meditation", trusted_bpm=True)
+    assert trusted["bpm"] == 134
+    assert trusted["tempo_tier"] == "fast"
+    assert trusted["was_corrected"] is False
+
+    recovered_fast = analyze_audio.correct_bpm_and_classify(58.0, time_signature="4/4", slot_hint="opener", groove_hint="rock_upbeat")
+    assert recovered_fast["bpm"] == 116
+    assert recovered_fast["tempo_tier"] == "fast"
+    assert recovered_fast["correction_reason"] == "fast_context_double_time_mul_2"
+
+    sub_48 = analyze_audio.correct_bpm_and_classify(42.0, time_signature="4/4")
+    assert sub_48["bpm"] == 84
+    assert sub_48["tempo_tier"] == "medium"
+    assert sub_48["correction_reason"] == "sub_48_double_time_mul_2"
+
+    m_9_8 = analyze_audio.correct_bpm_and_classify(174.0, time_signature="9/8")
+    assert m_9_8["bpm"] == 58
+    assert m_9_8["tempo_tier"] == "ballad"
+
+    m_3_4_x3 = analyze_audio.correct_bpm_and_classify(174.0, time_signature="3/4")
+    assert m_3_4_x3["bpm"] == 58
+    assert m_3_4_x3["tempo_tier"] == "ballad"
+
+    m_3_4_half = analyze_audio.correct_bpm_and_classify(40.0, time_signature="3/4")
+    assert m_3_4_half["bpm"] == 80
+    assert m_3_4_half["tempo_tier"] == "medium"
+
+    # 3. infer_worship_semantics avoids 1-char collisions and duration-based fast misclassification
+    pinancheo = build_bulk_catalog.infer_worship_semantics("내 피난처 예수")
+    assert pinancheo["theological_tone"] != "cross_sacrifice"
+
+    janjanhan = build_bulk_catalog.infer_worship_semantics("잔잔한 물가로")
+    assert janjanhan["theological_tone"] != "cross_sacrifice"
+
+    bulssang = build_bulk_catalog.infer_worship_semantics("주여 날 불쌍히 여기소서")
+    assert bulssang["theological_tone"] == "penitence"
+
+    silent_night = build_bulk_catalog.infer_worship_semantics("고요한 밤 거룩한 밤", category="modern_worship", duration_sec=190)
+    assert silent_night["tempo_tier"] == "ballad"
+    assert "opener" not in silent_night["liturgical_stages"]
+
+    # 4. Rebuilt worship.db verification for previously misclassified songs & hymn merges
+    conn = common.connect_dbs(common.WORSHIP_DB_PATH, attach_local=False, ensure_schemas=False)
+    try:
+        ballad_titles = [
+            "거기 너 있었는가",
+            "고요한 밤 거룩한 밤",
+            "곤한 내 영혼 편히 쉴 곳과",
+            "그 크신 하나님의 사랑",
+            "사랑해요 목소리 높여",
+            "나 주님의 기쁨 되기 원하네",
+            "거룩하신 하나님",
+        ]
+        for title in ballad_titles:
+            rows = conn.execute(
+                """
+                SELECT s.liturgical_stages, a.tempo_tier, a.worship_team
+                FROM songs s JOIN arrangements a ON a.song_id = s.id
+                WHERE s.normalized_title = ?
+                """,
+                (common.normalize_title(title),),
+            ).fetchall()
+            assert rows, f"Missing ballad song: {title}"
+            for r in rows:
+                stages = json.loads(r["liturgical_stages"] or "[]")
+                assert r["tempo_tier"] == "ballad", f"{title} ({r['worship_team']}) had {r['tempo_tier']}"
+                assert "opener" not in stages, f"{title} unexpectedly retained opener: {stages}"
+
+        fast_titles = [
+            "주 이름 찬양",
+            "오 자유",
+            "나는 자유해",
+            "죄에서 자유를 얻게 함은",
+            "새 노래로 노래하리",
+            "기뻐하며 왕께",
+        ]
+        for title in fast_titles:
+            rows = conn.execute(
+                """
+                SELECT s.liturgical_stages, a.tempo_tier, a.worship_team
+                FROM songs s JOIN arrangements a ON a.song_id = s.id
+                WHERE s.normalized_title = ?
+                """,
+                (common.normalize_title(title),),
+            ).fetchall()
+            assert rows, f"Missing fast song: {title}"
+            for r in rows:
+                stages = json.loads(r["liturgical_stages"] or "[]")
+                assert r["tempo_tier"] == "fast", f"{title} ({r['worship_team']}) had {r['tempo_tier']}"
+                assert "opener" in stages, f"{title} missing opener stage: {stages}"
+
+        hymn_309 = conn.execute(
+            """
+            SELECT s.category, s.hymn_number
+            FROM songs s JOIN arrangements a ON a.song_id = s.id
+            WHERE s.normalized_title = ? AND a.worship_team = '피아워십'
+            """,
+            (common.normalize_title("목마른 내 영혼"),),
+        ).fetchone()
+        assert hymn_309 is not None
+        assert hymn_309["category"] == "hymn"
+        assert hymn_309["hymn_number"] == 309
+
+        noise_cnt = conn.execute(
+            "SELECT COUNT(*) FROM songs WHERE title_ko LIKE '%ASMR%' OR title_ko LIKE '%Big Yellow Taxi%'"
+        ).fetchone()[0]
+        assert noise_cnt == 0
+    finally:
+        conn.close()
+
+
+
 
 
 

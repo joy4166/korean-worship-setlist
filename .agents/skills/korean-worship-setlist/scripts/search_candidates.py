@@ -332,17 +332,21 @@ def search_setlist_candidates(
 
     rows = conn.execute(
         """
-        SELECT s.*, a.id AS arr_id, a.worship_team, a.key_signature, a.time_signature,
+        SELECT s.id, s.song_slug, s.title_ko, s.normalized_title, s.first_line_incipit,
+               s.category, s.hymn_number, s.era, s.adoption_tier, s.lyric_accessibility,
+               s.church_seasons, s.service_slots, s.liturgical_stages, s.theological_tone,
+               s.theological_core, s.caution_nuance, s.scripture_refs,
+               s.available_sections, s.default_song_form,
+               a.worship_team, a.key_signature, a.time_signature,
                a.bpm, a.tempo_tier, a.groove_style, a.intro_first_chord, a.outro_last_chord,
-               a.ending_type, a.drum_grooves, a.lowest_note, a.highest_note,
-               a.vocal_range_fit, a.congregation_singability, a.band_dependency,
+               a.ending_type, a.lowest_note, a.highest_note,
+               a.congregation_singability, a.band_dependency,
                a.session_fit, a.arrangement_song_form, a.youtube_url, a.youtube_start_sec,
                a.key_source, a.bpm_source, a.confidence, a.is_default,
                COALESCE(r.familiarity, 'unknown') AS familiarity,
                r.preferred_key,
                r.team_memo,
-               COALESCE(r.consecutive_learning_count, 0) AS consecutive_learning_count,
-               r.last_sung_date
+               COALESCE(r.consecutive_learning_count, 0) AS consecutive_learning_count
         FROM songs s
         JOIN arrangements a ON a.song_id = s.id
         LEFT JOIN local_db.repertoire r ON r.song_slug = s.song_slug
@@ -374,37 +378,18 @@ def search_setlist_candidates(
     max_monthly_new = int(preset.get("max_monthly_new_songs", 4))
     new_song_cap_reached = (service_type == "sunday_main") and (monthly_new_count >= max_monthly_new)
 
-    # Deduplicate per song picking the best matching arrangement (prefer requested team, else default)
-    arrangements_by_song: dict[int, list[dict[str, Any]]] = {}
+    # Select winning sqlite3.Row per song_id BEFORE dict(r) conversion
+    team_q = worship_team.lower() if worship_team else None
+    best_by_song: dict[int, tuple[tuple[int, int, float], Any]] = {}
     for r in rows:
-        item = dict(r)
-        vmeta = verified_sheet_meta.get(item["song_slug"])
-        if vmeta:
-            if vmeta.get("groove_style"):
-                item["groove_style"] = vmeta["groove_style"]
-            if vmeta.get("bpm") is not None:
-                v_bpm = int(vmeta["bpm"])
-                item["bpm"] = v_bpm
-                item["tempo_tier"] = "fast" if v_bpm >= 100 else ("medium" if v_bpm >= 80 else "ballad")
-            if vmeta.get("time_signature"):
-                item["time_signature"] = vmeta["time_signature"]
-            item["bpm_source"] = "local_sheet_verified"
-            item["confidence"] = max(float(item.get("confidence") or 0.5), 0.92)
-        item["groove_style"] = normalize_groove_style(item.get("groove_style"))
-        arrangements_by_song.setdefault(item["id"], []).append(item)
-
-    chosen_arrs: list[dict[str, Any]] = []
-    for song_id, arrs in arrangements_by_song.items():
-        if worship_team:
-            team_matches = [a for a in arrs if worship_team.lower() in a["worship_team"].lower()]
-            pick = (
-                sorted(team_matches, key=lambda x: (-int(x.get("is_default") or 0), -float(x.get("confidence") or 0.0)))[0]
-                if team_matches
-                else sorted(arrs, key=lambda x: (-int(x.get("is_default") or 0), -float(x.get("confidence") or 0.0)))[0]
-            )
-        else:
-            pick = sorted(arrs, key=lambda x: (-int(x.get("is_default") or 0), -float(x.get("confidence") or 0.0)))[0]
-        chosen_arrs.append(pick)
+        sid = r["id"]
+        vmeta = verified_sheet_meta.get(r["song_slug"])
+        eff_conf = max(float(r["confidence"] or 0.5), 0.92) if vmeta else float(r["confidence"] or 0.0)
+        team_hit = 1 if (team_q and team_q in (r["worship_team"] or "").lower()) else 0
+        prio = (team_hit, int(r["is_default"] or 0), eff_conf)
+        cur_best = best_by_song.get(sid)
+        if cur_best is None or prio > cur_best[0]:
+            best_by_song[sid] = (prio, r)
 
     # Pre-index local sheet keys so small/medium/beginner teams prefer existing un-transposed charts
     local_sheet_keys: dict[str, set[str]] = {}
@@ -420,14 +405,80 @@ def search_setlist_candidates(
                     if nt and k_g:
                         local_sheet_keys.setdefault(nt, set()).add(parse_key_signature(k_g)[1])
 
-    # Precompute song-invariant JSON fields and vocal-range transposition once per song (not 4x per slot)
-    for pick in chosen_arrs:
-        pick["_seasons"] = json.loads(pick["church_seasons"] or "[]")
-        pick["_service_slots"] = json.loads(pick["service_slots"] or "[]")
-        pick["_scripture_refs"] = json.loads(pick["scripture_refs"] or "[]")
-        pick["_stages"] = json.loads(pick["liturgical_stages"] or "[]")
-        pick["_sections"] = json.loads(pick["available_sections"] or "[]")
-        pick["_session_fit"] = json.loads(pick.get("session_fit") or "[]")
+    def _fast_json_list(raw_val: str | None) -> list[Any]:
+        if not raw_val or raw_val == "[]":
+            return []
+        return json.loads(raw_val)
+
+    is_small = session_target in ("piano_only", "acoustic") or bool(preset.get("small_ensemble_only"))
+    era_set = set(era_list) if era_list else None
+    json_loads = json.loads
+
+    # Precompute song-invariant filters & bonus terms once per song (not 4x per slot)
+    active_cands: list[dict[str, Any]] = []
+    for _, best_row in best_by_song.values():
+        if era_set and best_row["era"] not in era_set:
+            continue
+        if category and best_row["category"] != category:
+            continue
+        if team_q and team_q not in (best_row["worship_team"] or "").lower():
+            continue
+        if is_small and best_row["band_dependency"] == "high":
+            continue
+
+        pick = dict(best_row)
+        vmeta = verified_sheet_meta.get(pick["song_slug"])
+        if vmeta:
+            if vmeta.get("groove_style"):
+                pick["groove_style"] = vmeta["groove_style"]
+            if vmeta.get("bpm") is not None:
+                v_bpm = int(vmeta["bpm"])
+                pick["bpm"] = v_bpm
+                pick["tempo_tier"] = "fast" if v_bpm >= 100 else ("medium" if v_bpm >= 80 else "ballad")
+            if vmeta.get("time_signature"):
+                pick["time_signature"] = vmeta["time_signature"]
+            pick["bpm_source"] = "local_sheet_verified"
+            pick["confidence"] = max(float(pick.get("confidence") or 0.5), 0.92)
+        pick["groove_style"] = normalize_groove_style(pick.get("groove_style"))
+
+        song_seasons = _fast_json_list(pick["church_seasons"])
+        allowed_season, season_bonus = _season_adjustment(
+            season, song_seasons, pick["theological_tone"], pick["tempo_tier"]
+        )
+        if not allowed_season:
+            continue
+
+        song_slots = _fast_json_list(pick["service_slots"])
+        slots_set = set(song_slots)
+        if single_slot and single_slot not in slots_set:
+            continue
+
+        fam = pick["familiarity"]
+        if new_song_cap_reached and fam in ("new", "learning"):
+            continue
+
+        slug = pick["song_slug"]
+        if fam == "pinned_ritual":
+            in_cooldown = False
+        elif fam == "learning" and int(pick["consecutive_learning_count"]) < 3:
+            in_cooldown = False
+        else:
+            in_cooldown = slug in recent_sung
+
+        song_refs = _fast_json_list(pick["scripture_refs"])
+        stages = _fast_json_list(pick["liturgical_stages"])
+        sections = _fast_json_list(pick["available_sections"])
+        session_fit_list = _fast_json_list(pick.get("session_fit"))
+
+        pick["_seasons"] = song_seasons
+        pick["_service_slots"] = song_slots
+        pick["_slots_set"] = slots_set
+        pick["_scripture_refs"] = song_refs
+        pick["_stages"] = stages
+        pick["_stages_set"] = set(stages)
+        pick["_sections"] = sections
+        pick["_session_fit"] = session_fit_list
+        pick["_in_cooldown"] = in_cooldown
 
         memo_str = str(pick.get("team_memo") or "")
         effective_pref_key = (
@@ -445,115 +496,54 @@ def search_setlist_candidates(
             preferred_key=effective_pref_key,
         )
         pick["_trans"] = trans
+
         if local_sheet_keys:
             norm_t = pick.get("normalized_title") or normalize_title(pick["title_ko"])
-            pick["_local_match_bonus"] = (
+            local_match_bonus = (
                 0.08 if parse_key_signature(trans["target_key"])[1] in local_sheet_keys.get(norm_t, set()) else 0.0
             )
         else:
-            pick["_local_match_bonus"] = 0.0
+            local_match_bonus = 0.0
 
-    def score_for_slot(cand: dict[str, Any], slot: dict[str, Any], ignore_cooldown: bool = False) -> tuple[bool, float, dict[str, Any]]:
-        if era_list and cand["era"] not in era_list:
-            return False, -1.0, {}
-        if category and cand["category"] != category:
-            return False, -1.0, {}
-        if worship_team and worship_team.lower() not in cand["worship_team"].lower():
-            return False, -1.0, {}
-        if slot.get("strict_tempo") and cand["tempo_tier"] not in slot["tempo_tiers"]:
-            return False, -1.0, {}
-
-        # Small-ensemble band_dependency check (do not drop full_band recordings if band_dependency is low/medium)
-        is_small = session_target in ("piano_only", "acoustic") or preset.get("small_ensemble_only")
-        if is_small and cand["band_dependency"] == "high":
-            return False, -1.0, {}
-
-        song_seasons = cand["_seasons"]
-        allowed_season, season_bonus = _season_adjustment(season, song_seasons, cand["theological_tone"], cand["tempo_tier"])
-        if not allowed_season:
-            return False, -1.0, {}
-
-        song_slots = cand["_service_slots"]
-        if single_slot and single_slot not in song_slots:
-            return False, -1.0, {}
-
-        fam = cand["familiarity"]
-        slug = cand["song_slug"]
-        in_cooldown = slug in recent_sung
-        cooldown_warning = False
-
-        if fam == "pinned_ritual":
-            in_cooldown = False  # 0-week cooldown exemption
-        elif fam == "learning" and int(cand["consecutive_learning_count"]) < 3:
-            in_cooldown = False  # learning window allows 2-3 consecutive weeks
-        elif in_cooldown and not ignore_cooldown:
-            return False, -1.0, {}
-        elif in_cooldown:
-            cooldown_warning = True
-
-        if new_song_cap_reached and fam in ("new", "learning"):
-            return False, -1.0, {}
-
-        # Semantic & keyword relevance
-        sem_score = e5_scores.get(cand["id"], 0.0)
-        fts_score = fts_scores.get(cand["id"], 0.0)
-        song_refs = cand["_scripture_refs"]
+        sem_score = e5_scores.get(pick["id"], 0.0)
+        fts_score = fts_scores.get(pick["id"], 0.0)
         ref_match = 1.0 if scripture_chap and any(scripture_book_chapter(sr) == scripture_chap for sr in song_refs) else 0.0
-        stages = cand["_stages"]
-        stage_match = 1.0 if slot["stage"] in stages else 0.3
-        tempo_match = 1.0 if cand["tempo_tier"] in slot["tempo_tiers"] else 0.15
-        slot_pref_match = 0.25 if any(sp in song_slots for sp in slot.get("service_slot_pref", [])) else 0.0
-
-        if e5_scores:
-            relevance = 0.60 * sem_score + 0.25 * min(1.0, 0.45 * fts_score + 0.35 * ref_match + 0.20 * stage_match)
-        else:
-            relevance = 0.85 * min(1.0, 0.50 * fts_score + 0.25 * ref_match + 0.25 * stage_match)
+        pick["_sem_score"] = sem_score
+        pick["_fts_score"] = fts_score
+        pick["_ref_match"] = ref_match
 
         fam_base = FAMILIARITY_SCORES.get(fam, 0.55)
-        adopt_base = ADOPTION_SCORES.get(cand["adoption_tier"], 0.6)
+        adopt_base = ADOPTION_SCORES.get(pick["adoption_tier"], 0.6)
         familiarity_score = 0.6 * fam_base + 0.4 * adopt_base
-        if fam == "learning" and int(cand["consecutive_learning_count"]) < 3:
+        if fam == "learning" and int(pick["consecutive_learning_count"]) < 3:
             familiarity_score += 0.18
 
-        seeker_bonus = 0.15 if (seeker_emphasis and cand["lyric_accessibility"] == "easy_seeker") else 0.0
-        bridge_bonus = 0.12 if (preset.get("prefer_bridge") and "B" in cand["_sections"]) else 0.0
-        small_bonus = 0.12 if (is_small and cand["band_dependency"] == "low") else 0.0
-        session_fit_list = cand["_session_fit"]
+        seeker_bonus = 0.15 if (seeker_emphasis and pick["lyric_accessibility"] == "easy_seeker") else 0.0
+        bridge_bonus = 0.12 if (preset.get("prefer_bridge") and "B" in sections) else 0.0
+        small_bonus = 0.12 if (is_small and pick["band_dependency"] == "low") else 0.0
         session_bonus = 0.08 if session_target in session_fit_list else 0.0
         intergen_bonus = 0.0
         if intergenerational:
-            sing = cand.get("congregation_singability", "modern_simple")
+            sing = pick.get("congregation_singability", "modern_simple")
             if sing in ("modern_simple", "hymn_traditional"):
                 intergen_bonus += 0.25
             elif sing == "syncopated_band":
                 intergen_bonus -= 0.35
-            if cand["adoption_tier"] == "core_standard":
+            if pick["adoption_tier"] == "core_standard":
                 intergen_bonus += 0.18
         if age_group == "senior_adult" and not era_list:
-            if cand["category"] in ("hymn", "classic_gospel") or cand["era"] in ("traditional", "1980s", "1990s", "2000s"):
+            if pick["category"] in ("hymn", "classic_gospel") or pick["era"] in ("traditional", "1980s", "1990s", "2000s"):
                 intergen_bonus += 0.22
-            if cand.get("congregation_singability") == "syncopated_band":
+            if pick.get("congregation_singability") == "syncopated_band":
                 intergen_bonus -= 0.30
         if age_group == "youth_young_adult" and not era_list:
-            if cand["category"] == "modern_worship" and cand["era"] in ("2010s", "2020s"):
+            if pick["category"] == "modern_worship" and pick["era"] in ("2010s", "2020s"):
                 intergen_bonus += 0.15
 
-        trans = cand["_trans"]
-        local_match_bonus = cand["_local_match_bonus"]
-
-        # Small ensemble intro compression note
-        song_form = cand["arrangement_song_form"] or cand["default_song_form"] or ""
-        ensemble_note = ""
-        if is_small and "I(8m)" in song_form:
-            song_form = song_form.replace("I(8m)", "I(4m)")
-            ensemble_note = "소편성 인트로 축소(I(8m)->I(4m))"
-
-        conf = float(cand.get("confidence") or 0.5)
-        total = (
-            relevance
-            + 0.15 * familiarity_score
-            + 0.30 * tempo_match
-            + slot_pref_match
+        conf = float(pick.get("confidence") or 0.5)
+        pick["_conf"] = conf
+        pick["_song_bonus"] = (
+            0.15 * familiarity_score
             + season_bonus
             + seeker_bonus
             + bridge_bonus
@@ -562,12 +552,58 @@ def search_setlist_candidates(
             + local_match_bonus
             + intergen_bonus
             + 0.08 * conf
+        )
+        active_cands.append(pick)
+
+    has_e5 = bool(e5_scores)
+
+    def score_for_slot(
+        cand: dict[str, Any],
+        slot: dict[str, Any],
+        slot_pref: tuple[str, ...],
+        slot_tempo_tiers: set[str],
+        strict_tempo: bool,
+        slot_stage: str,
+        ignore_cooldown: bool = False,
+    ) -> tuple[bool, float, bool]:
+        if strict_tempo and cand["tempo_tier"] not in slot_tempo_tiers:
+            return False, -1.0, False
+
+        in_cooldown = cand["_in_cooldown"]
+        if in_cooldown and not ignore_cooldown:
+            return False, -1.0, False
+        cooldown_warning = in_cooldown
+
+        stage_match = 1.0 if slot_stage in cand["_stages_set"] else 0.3
+        tempo_match = 1.0 if cand["tempo_tier"] in slot_tempo_tiers else 0.15
+        slots_set = cand["_slots_set"]
+        slot_pref_match = 0.25 if any(sp in slots_set for sp in slot_pref) else 0.0
+
+        if has_e5:
+            relevance = 0.60 * cand["_sem_score"] + 0.25 * min(1.0, 0.45 * cand["_fts_score"] + 0.35 * cand["_ref_match"] + 0.20 * stage_match)
+        else:
+            relevance = 0.85 * min(1.0, 0.50 * cand["_fts_score"] + 0.25 * cand["_ref_match"] + 0.25 * stage_match)
+
+        total = (
+            relevance
+            + cand["_song_bonus"]
+            + 0.30 * tempo_match
+            + slot_pref_match
             - (0.5 if cooldown_warning else 0.0)
         )
+        return True, total, cooldown_warning
 
-        enriched = {
+    def _materialize_enriched(cand: dict[str, Any], slot: dict[str, Any], score_val: float, cooldown_warning: bool) -> dict[str, Any]:
+        trans = cand["_trans"]
+        song_form = cand["arrangement_song_form"] or cand["default_song_form"] or ""
+        ensemble_note = ""
+        if is_small and "I(8m)" in song_form:
+            song_form = song_form.replace("I(8m)", "I(4m)")
+            ensemble_note = "소편성 인트로 축소(I(8m)->I(4m))"
+        conf = cand["_conf"]
+        return {
             "song_id": cand["id"],
-            "song_slug": slug,
+            "song_slug": cand["song_slug"],
             "title_ko": cand["title_ko"],
             "first_line_incipit": cand["first_line_incipit"],
             "category": cand["category"],
@@ -597,82 +633,87 @@ def search_setlist_candidates(
             "theological_tone": cand["theological_tone"],
             "theological_core": cand["theological_core"],
             "caution_nuance": cand["caution_nuance"],
-            "scripture_refs": list(song_refs),
-            "familiarity": fam,
+            "scripture_refs": list(cand["_scripture_refs"]),
+            "familiarity": cand["familiarity"],
             "adoption_tier": cand["adoption_tier"],
             "band_dependency": cand["band_dependency"],
             "youtube_url": cand["youtube_url"],
             "youtube_start_sec": cand["youtube_start_sec"],
             "cooldown_warning": cooldown_warning,
             "ensemble_note": ensemble_note,
-            "score": round(total, 4),
+            "score": round(score_val, 4),
         }
-        return True, total, enriched
 
     used_slugs: set[str] = set()
     era_counts: dict[str, int] = {e: 0 for e in era_list}
     pre_sermon_results: list[dict[str, Any]] = []
-    slot_pools: list[list[dict[str, Any]]] = []
+    slot_pools: list[tuple[dict[str, Any], list[list[Any]]]] = []
     has_trad_or_classic = False
 
     for slot in slots:
-        scored_pool: list[dict[str, Any]] = []
-        for cand in chosen_arrs:
+        slot_pref = tuple(slot.get("service_slot_pref", []))
+        slot_tempo_tiers = set(slot.get("tempo_tiers", []))
+        strict_tempo = bool(slot.get("strict_tempo"))
+        slot_stage = slot["stage"]
+
+        raw_pool: list[list[Any]] = []
+        for cand in active_cands:
             if cand["song_slug"] in used_slugs:
                 continue
-            ok, sc, enriched = score_for_slot(cand, slot, ignore_cooldown=False)
+            ok, sc, cw = score_for_slot(cand, slot, slot_pref, slot_tempo_tiers, strict_tempo, slot_stage, ignore_cooldown=False)
             if ok:
-                scored_pool.append(enriched)
+                raw_pool.append([round(sc, 4), cw, cand])
 
-        if not scored_pool:
-            for cand in chosen_arrs:
+        if not raw_pool:
+            for cand in active_cands:
                 if cand["song_slug"] in used_slugs:
                     continue
-                ok, sc, enriched = score_for_slot(cand, slot, ignore_cooldown=True)
+                ok, sc, cw = score_for_slot(cand, slot, slot_pref, slot_tempo_tiers, strict_tempo, slot_stage, ignore_cooldown=True)
                 if ok:
-                    scored_pool.append(enriched)
+                    raw_pool.append([round(sc, 4), cw, cand])
 
         # For sunday_main last slot, nudge hymn/classic_gospel if none picked yet
         if preset.get("require_traditional_or_classic") and slot["slot_index"] == len(slots) and not has_trad_or_classic:
-            for item in scored_pool:
-                if item["category"] in ("hymn", "classic_gospel"):
-                    item["score"] = round(item["score"] + 0.35, 4)
+            for entry in raw_pool:
+                if entry[2]["category"] in ("hymn", "classic_gospel"):
+                    entry[0] = round(entry[0] + 0.35, 4)
 
         # Balance era diversity when multiple eras are requested (e.g. "2000s,2010s")
-        if len(era_list) > 1 and scored_pool:
+        if len(era_list) > 1 and raw_pool:
             min_era_cnt = min(era_counts.values()) if era_counts else 0
-            for item in scored_pool:
-                if era_counts.get(item["era"], 0) == min_era_cnt:
-                    item["score"] = round(item["score"] + 0.25, 4)
+            for entry in raw_pool:
+                if era_counts.get(entry[2]["era"], 0) == min_era_cnt:
+                    entry[0] = round(entry[0] + 0.25, 4)
 
         # Prefer rhythmically compatible groove when chaining fast songs
-        if pre_sermon_results and "fast" in slot.get("tempo_tiers", []):
+        if pre_sermon_results and "fast" in slot_tempo_tiers:
             prev_primary = pre_sermon_results[-1]["primary"]
             prev_gr = normalize_groove_style(prev_primary.get("groove_style"))
             prev_fam = GROOVE_SUBDIVISION_FAMILY.get(prev_gr or "", "neutral")
             if prev_primary.get("tempo_tier") == "fast" and prev_fam != "neutral":
-                for item in scored_pool:
-                    cur_gr = normalize_groove_style(item.get("groove_style"))
+                for entry in raw_pool:
+                    cur_gr = entry[2].get("groove_style")
                     cur_fam = GROOVE_SUBDIVISION_FAMILY.get(cur_gr or "", "neutral")
                     if cur_fam == "neutral":
                         continue
                     if cur_fam == prev_fam:
-                        item["score"] = round(item["score"] + 0.08, 4)
+                        entry[0] = round(entry[0] + 0.08, 4)
                     else:
-                        item["score"] = round(item["score"] - 0.08, 4)
+                        entry[0] = round(entry[0] - 0.08, 4)
 
-        scored_pool.sort(key=lambda x: -x["score"])
-        if not scored_pool:
+        raw_pool.sort(key=lambda x: -x[0])
+        if not raw_pool:
             continue
 
-        primary = scored_pool[0]
+        top_sc, top_cw, top_cand = raw_pool[0]
+        primary = _materialize_enriched(top_cand, slot, top_sc, top_cw)
         used_slugs.add(primary["song_slug"])
         if primary["era"] in era_counts:
             era_counts[primary["era"]] += 1
         if primary["category"] in ("hymn", "classic_gospel"):
             has_trad_or_classic = True
-        plan_b = scored_pool[1:3]
-        slot_pools.append(scored_pool)
+        plan_b = [_materialize_enriched(c, slot, sc, cw) for sc, cw, c in raw_pool[1:3]]
+        slot_pools.append((slot, raw_pool))
 
         pre_sermon_results.append(
             {
@@ -700,21 +741,23 @@ def search_setlist_candidates(
         target_fresh = max(1 if familiar_ratio <= 0.85 else 0, round(len(pre_sermon_results) * (1.0 - familiar_ratio)))
         current_fresh = sum(1 for s in pre_sermon_results if _is_fresh_item(s["primary"]))
         while current_fresh < target_fresh:
-            best_promo: tuple[int, dict[str, Any], float] | None = None
+            best_promo: tuple[int, dict[str, Any], float, bool, dict[str, Any]] | None = None
             for idx, sl in enumerate(pre_sermon_results):
                 if sl["target_stage"] not in ("meditation", "declaration") or _is_fresh_item(sl["primary"]):
                     continue
                 top_score = sl["primary"]["score"]
-                for cand in slot_pools[idx][1:]:
+                slot_obj, raw_entries = slot_pools[idx]
+                for sc, cw, cand in raw_entries[1:]:
                     if cand["song_slug"] in used_slugs:
                         continue
-                    gap = top_score - cand["score"]
+                    gap = top_score - sc
                     if _is_fresh_item(cand) and gap <= 0.25:
-                        if best_promo is None or cand["score"] > best_promo[2]:
-                            best_promo = (idx, cand, cand["score"])
+                        if best_promo is None or sc > best_promo[2]:
+                            best_promo = (idx, slot_obj, sc, cw, cand)
             if best_promo is None:
                 break
-            idx, fresh_cand, _ = best_promo
+            idx, slot_obj, sc, cw, fresh_raw = best_promo
+            fresh_cand = _materialize_enriched(fresh_raw, slot_obj, sc, cw)
             old_primary = pre_sermon_results[idx]["primary"]
             used_slugs.discard(old_primary["song_slug"])
             used_slugs.add(fresh_cand["song_slug"])
