@@ -1,6 +1,6 @@
 {
   "name": "korean-worship-setlist",
-  "version": "0.1.2",
+  "version": "0.1.1",
   "description": "Korean church worship setlist planner, key/tempo transition optimizer, vision sheet verifier, and song-form stamper skill for AI coding agents.",
   "type": "module",
   "license": "MIT AND OFL-1.1",
