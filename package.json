@@ -1,5 +1,5 @@
 {
-  "name": "korea-worship-setlist",
+  "name": "korean-worship-setlist",
   "version": "0.1.0",
   "description": "Korean church worship setlist planner, key/tempo transition optimizer, vision sheet verifier, and song-form stamper skill for AI coding agents.",
   "type": "module",
@@ -21,11 +21,10 @@
     "node": ">=18.0.0"
   },
   "bin": {
-    "korea-worship-setlist": "bin/korea-worship-setlist.mjs",
-    "korean-worship-setlist": "bin/korea-worship-setlist.mjs"
+    "korean-worship-setlist": "bin/korean-worship-setlist.mjs"
   },
   "files": [
-    "bin/korea-worship-setlist.mjs",
+    "bin/korean-worship-setlist.mjs",
     "plugin.json",
     "DESIGN.md",
     ".agents/skills/korean-worship-setlist/SKILL.md",
@@ -49,9 +48,9 @@
     "url": "https://github.com/joy4166/korean-worship-setlist/issues"
   },
   "scripts": {
-    "install-skill": "node bin/korea-worship-setlist.mjs install",
-    "install-global": "node bin/korea-worship-setlist.mjs install --global",
-    "install-plugin": "node bin/korea-worship-setlist.mjs install --plugin",
-    "test:cli": "node bin/korea-worship-setlist.mjs --help"
+    "install-skill": "node bin/korean-worship-setlist.mjs install",
+    "install-global": "node bin/korean-worship-setlist.mjs install --global",
+    "install-plugin": "node bin/korean-worship-setlist.mjs install --plugin",
+    "test:cli": "node bin/korean-worship-setlist.mjs --help"
   }
 }

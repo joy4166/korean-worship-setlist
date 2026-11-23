@@ -49,16 +49,16 @@
 ### 0. npm (`npx`)으로 스킬 설치
 ```powershell
 # 현재 워크스페이스에 설치 (.agents/skills/korean-worship-setlist)
-npx korea-worship-setlist install
+npx korean-worship-setlist install
 
 # 전역 스킬로 설치 (~/.gemini/config/skills/korean-worship-setlist)
-npx korea-worship-setlist install --global
+npx korean-worship-setlist install --global
 
 # Antigravity 전역 플러그인으로 설치 (~/.gemini/config/plugins/korean-worship-setlist)
-npx korea-worship-setlist install --plugin
+npx korean-worship-setlist install --plugin
 
 # Claude Code 워크스페이스 스킬로 설치 (.claude/skills/korean-worship-setlist)
-npx korea-worship-setlist install --claude
+npx korean-worship-setlist install --claude
 ```
 
 ### 1. 환경 설치 (`uv`)

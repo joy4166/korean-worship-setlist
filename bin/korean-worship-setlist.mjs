@@ -32,11 +32,11 @@ function readPkgVersion() {
 }
 
 function printHelp() {
-  console.log(`korea-worship-setlist v${readPkgVersion()}
+  console.log(`korean-worship-setlist v${readPkgVersion()}
 Korean church worship setlist planner & sheet stamper skill installer
 
 Usage:
-  npx korea-worship-setlist [install] [options]
+  npx korean-worship-setlist [install] [options]
 
 Commands:
   install                 Install skill files into target directory (default)
@@ -52,11 +52,11 @@ Options:
   --help, -h              Show this help message
 
 Examples:
-  npx korea-worship-setlist                         # Install to ./.agents/skills/korean-worship-setlist
-  npx korea-worship-setlist install --global        # Install to ~/.gemini/config/skills/korean-worship-setlist
-  npx korea-worship-setlist install --plugin        # Install Antigravity plugin to ~/.gemini/config/plugins/korean-worship-setlist
-  npx korea-worship-setlist install --claude        # Install to ./.claude/skills/korean-worship-setlist
-  npx korea-worship-setlist install --dest ./skills # Install to custom path
+  npx korean-worship-setlist                         # Install to ./.agents/skills/korean-worship-setlist
+  npx korean-worship-setlist install --global        # Install to ~/.gemini/config/skills/korean-worship-setlist
+  npx korean-worship-setlist install --plugin        # Install Antigravity plugin to ~/.gemini/config/plugins/korean-worship-setlist
+  npx korean-worship-setlist install --claude        # Install to ./.claude/skills/korean-worship-setlist
+  npx korean-worship-setlist install --dest ./skills # Install to custom path
 `);
 }
 
@@ -92,7 +92,7 @@ function parseArgs(argv) {
     } else if (arg === '--dest') {
       const next = argv[i + 1];
       if (!next || next.startsWith('-')) {
-        console.error('[korea-worship-setlist] Error: --dest requires a directory path.');
+        console.error('[korean-worship-setlist] Error: --dest requires a directory path.');
         process.exit(1);
       }
       opts.dest = next;
@@ -100,17 +100,17 @@ function parseArgs(argv) {
     } else if (arg.startsWith('--dest=')) {
       const val = arg.slice(7);
       if (!val) {
-        console.error('[korea-worship-setlist] Error: --dest= requires a directory path.');
+        console.error('[korean-worship-setlist] Error: --dest= requires a directory path.');
         process.exit(1);
       }
       opts.dest = val;
     } else if (arg.startsWith('-')) {
-      console.error(`[korea-worship-setlist] Error: Unknown option "${arg}". Run --help for usage.`);
+      console.error(`[korean-worship-setlist] Error: Unknown option "${arg}". Run --help for usage.`);
       process.exit(1);
     } else if (!opts.command) {
       opts.command = arg;
     } else {
-      console.error(`[korea-worship-setlist] Error: Unexpected argument "${arg}". Run --help for usage.`);
+      console.error(`[korean-worship-setlist] Error: Unexpected argument "${arg}". Run --help for usage.`);
       process.exit(1);
     }
   }
@@ -180,7 +180,7 @@ function shouldCopySkillEntry(src) {
 const opts = parseArgs(process.argv.slice(2));
 
 if (opts.version) {
-  console.log(`korea-worship-setlist v${readPkgVersion()}`);
+  console.log(`korean-worship-setlist v${readPkgVersion()}`);
   process.exit(0);
 }
 
@@ -190,12 +190,12 @@ if (opts.help) {
 }
 
 if (opts.command && opts.command !== 'install') {
-  console.error(`[korea-worship-setlist] Error: Unknown command "${opts.command}". Expected "install".`);
+  console.error(`[korean-worship-setlist] Error: Unknown command "${opts.command}". Expected "install".`);
   process.exit(1);
 }
 
 if (!fs.existsSync(SRC_SKILL_DIR)) {
-  console.error(`[korea-worship-setlist] Error: Bundled skill directory not found at ${SRC_SKILL_DIR}`);
+  console.error(`[korean-worship-setlist] Error: Bundled skill directory not found at ${SRC_SKILL_DIR}`);
   process.exit(1);
 }
 
@@ -212,7 +212,7 @@ if (target.mode === 'plugin' && target.pluginDir) {
 }
 
 if (path.resolve(SRC_SKILL_DIR) === path.resolve(target.skillDir)) {
-  console.log(`[korea-worship-setlist] Skill files are already in place at:\n  ${target.skillDir}`);
+  console.log(`[korean-worship-setlist] Skill files are already in place at:\n  ${target.skillDir}`);
 } else {
   fs.mkdirSync(target.skillDir, { recursive: true });
   fs.cpSync(SRC_SKILL_DIR, target.skillDir, {
@@ -221,7 +221,7 @@ if (path.resolve(SRC_SKILL_DIR) === path.resolve(target.skillDir)) {
     filter: shouldCopySkillEntry,
   });
   console.log(
-    `[korea-worship-setlist] Installed ${target.mode === 'plugin' ? 'Antigravity plugin' : 'skill'} to:\n  ${
+    `[korean-worship-setlist] Installed ${target.mode === 'plugin' ? 'Antigravity plugin' : 'skill'} to:\n  ${
       target.pluginDir || target.skillDir
     }`
   );
@@ -231,13 +231,13 @@ if (path.resolve(SRC_SKILL_DIR) === path.resolve(target.skillDir)) {
 }
 
 if (opts.sync) {
-  console.log(`[korea-worship-setlist] Running uv sync --project "${target.skillDir}"...`);
+  console.log(`[korean-worship-setlist] Running uv sync --project "${target.skillDir}"...`);
   const res = spawnSync('uv', ['sync', '--project', target.skillDir], {
     stdio: 'inherit',
     shell: process.platform === 'win32',
   });
   if (res.error) {
-    console.error(`[korea-worship-setlist] Failed to launch uv: ${res.error.message}`);
+    console.error(`[korean-worship-setlist] Failed to launch uv: ${res.error.message}`);
     process.exit(1);
   }
   if (res.status !== 0) {
