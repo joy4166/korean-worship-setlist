@@ -1,0 +1,11 @@
+{
+  "name": "korean-worship-setlist",
+  "displayName": "Korean Worship Setlist (한국 찬양 콘티)",
+  "version": "0.1.0",
+  "description": "한국 교회 예배 찬양 콘티 선곡, Key·박자 전조 설계, 로컬 악보 비전 검수 및 송폼 스탬핑 스킬",
+  "suggestedPrompts": [
+    "/korean-worship-setlist init 으로 우리 교회 찬양팀 초기 설정 진행해줘",
+    "이번 주 청년부 예배 시편 23편 주제로 찬양 콘티 짜줘",
+    "찬양 콘티 2번 곡 Key 변경해서 부분 수정해줘"
+  ]
+}

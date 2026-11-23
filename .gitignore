@@ -18,3 +18,7 @@ sheet/
 .agents/skills/korean-worship-setlist/output/
 output/
 *.tmp.*
+
+# Node / npm packaging artifacts
+node_modules/
+*.tgz

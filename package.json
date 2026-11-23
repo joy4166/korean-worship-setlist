@@ -1,0 +1,57 @@
+{
+  "name": "korea-worship-setlist",
+  "version": "0.1.0",
+  "description": "Korean church worship setlist planner, key/tempo transition optimizer, vision sheet verifier, and song-form stamper skill for AI coding agents.",
+  "type": "module",
+  "license": "MIT AND OFL-1.1",
+  "keywords": [
+    "antigravity",
+    "claude-code",
+    "codex",
+    "cursor",
+    "ai-agent",
+    "agent-skill",
+    "worship",
+    "setlist",
+    "ccm",
+    "korean-church",
+    "찬양콘티"
+  ],
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "bin": {
+    "korea-worship-setlist": "bin/korea-worship-setlist.mjs",
+    "korean-worship-setlist": "bin/korea-worship-setlist.mjs"
+  },
+  "files": [
+    "bin/korea-worship-setlist.mjs",
+    "plugin.json",
+    "DESIGN.md",
+    ".agents/skills/korean-worship-setlist/SKILL.md",
+    ".agents/skills/korean-worship-setlist/LICENSE",
+    ".agents/skills/korean-worship-setlist/pyproject.toml",
+    ".agents/skills/korean-worship-setlist/uv.lock",
+    ".agents/skills/korean-worship-setlist/scripts/",
+    ".agents/skills/korean-worship-setlist/references/",
+    ".agents/skills/korean-worship-setlist/resources/fonts/",
+    ".agents/skills/korean-worship-setlist/data/worship.db",
+    ".agents/skills/korean-worship-setlist/data/seed_songs.json",
+    ".agents/skills/korean-worship-setlist/data/blocked_sources.json",
+    ".agents/skills/korean-worship-setlist/data/user_config.example.json"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/joy4166/korean-worship-setlist.git"
+  },
+  "homepage": "https://github.com/joy4166/korean-worship-setlist#readme",
+  "bugs": {
+    "url": "https://github.com/joy4166/korean-worship-setlist/issues"
+  },
+  "scripts": {
+    "install-skill": "node bin/korea-worship-setlist.mjs install",
+    "install-global": "node bin/korea-worship-setlist.mjs install --global",
+    "install-plugin": "node bin/korea-worship-setlist.mjs install --plugin",
+    "test:cli": "node bin/korea-worship-setlist.mjs --help"
+  }
+}
