@@ -12,8 +12,10 @@ from common import (
     DEFAULT_VOCAL_RANGES,
     USER_CONFIG_EXAMPLE_PATH,
     WORSHIP_DB_PATH,
+    check_skill_update,
     configure_utf8_stdio,
     connect_dbs,
+    get_installed_skill_version,
     get_local_db_path,
     get_user_config_path,
     load_json_file,
@@ -92,7 +94,7 @@ def inspect_profile(
             repertoire_count = int(conn.execute("SELECT COUNT(*) FROM local_db.repertoire").fetchone()[0])
             history_count = int(conn.execute("SELECT COUNT(*) FROM local_db.setlist_history").fetchone()[0])
 
-    return {
+    result: dict[str, Any] = {
         "initialized": cfg_exists,
         "config_path": str(cfg_path),
         "config": active_cfg,
@@ -104,7 +106,12 @@ def inspect_profile(
         "local_db_exists": l_db_path.exists(),
         "repertoire_count": repertoire_count,
         "history_count": history_count,
+        "skill_version": get_installed_skill_version(),
     }
+    upd = check_skill_update()
+    if upd is not None:
+        result["update_available"] = upd
+    return result
 
 
 def apply_profile(

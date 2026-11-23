@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import json
 import os
 import re
 import sqlite3
 import sys
+import time
 import unicodedata
+import urllib.request
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 KEY_SOURCE_VALUES = (
     "manual_seed",
@@ -700,7 +703,8 @@ def sync_songs_fts(conn: sqlite3.Connection, song_id: int | None = None) -> None
         )
 
 
-def parse_key_signature(key_str: str) -> tuple[str, str, int, bool]:
+@functools.lru_cache(maxsize=512)
+def parse_key_signature(key_str: str = "C") -> tuple[str, str, int, bool]:
     """
     Parse key strings like 'G', 'Em (G Key)', '사장조', 'Bb Key' into:
     (normalized_display_key, canonical_major_key, major_semitone_0_11, is_minor).
@@ -764,6 +768,7 @@ def semitone_distance(key_a: str, key_b: str) -> int:
     return diff
 
 
+@functools.lru_cache(maxsize=512)
 def parse_pitch_midi(note_str: str | None) -> int | None:
     """Convert scientific pitch notation (e.g. 'F#4', 'A2', 'Bb4') to MIDI number."""
     if not note_str:
@@ -903,3 +908,134 @@ def is_within_vocal_range(
 
 def json_dumps_ko(obj: Any) -> str:
     return json.dumps(obj, ensure_ascii=False)
+
+
+NPM_LATEST_URL = "https://registry.npmjs.org/korean-worship-setlist/latest"
+
+
+def get_installed_skill_version(skill_dir: Path | None = None) -> str:
+    """Read installed skill version from pyproject.toml."""
+    toml_path = (skill_dir or SKILL_DIR) / "pyproject.toml"
+    try:
+        content = toml_path.read_text(encoding="utf-8")
+        m = re.search(r'^version\s*=\s*"([^"]+)"', content, re.MULTILINE)
+        return m.group(1).strip() if m else "0.0.0"
+    except Exception:
+        return "0.0.0"
+
+
+def _parse_semver_tuple(ver: str | None) -> tuple[int, int, int] | None:
+    """Parse strict stable semver (x.y.z), rejecting empty strings and pre-releases."""
+    if not ver:
+        return None
+    m = re.match(r"^v?(\d+)\.(\d+)\.(\d+)$", str(ver).strip())
+    if not m:
+        return None
+    return int(m.group(1)), int(m.group(2)), int(m.group(3))
+
+
+def _resolve_upgrade_command(skill_dir: Path | None = None, *, home_dir: Path | None = None) -> str:
+    """Infer appropriate npx update command from the active skill installation location."""
+    s_dir = (skill_dir or SKILL_DIR).resolve()
+    parts = {p.lower() for p in s_dir.parts}
+    if ".gemini" in parts and "plugins" in parts:
+        return "npx korean-worship-setlist@latest update --plugin"
+    if ".gemini" in parts and "skills" in parts:
+        return "npx korean-worship-setlist@latest update --global"
+    if ".claude" in parts:
+        return (
+            "npx korean-worship-setlist@latest update --claude --global"
+            if is_global_skill_install(s_dir, home_dir=home_dir)
+            else "npx korean-worship-setlist@latest update --claude"
+        )
+    if is_global_skill_install(s_dir, home_dir=home_dir) and ".agents" in parts:
+        return "npx korean-worship-setlist@latest update --agents --global"
+    return "npx korean-worship-setlist@latest update"
+
+
+def check_skill_update(
+    skill_dir: Path | None = None,
+    *,
+    cache_path: Path | None = None,
+    ttl_seconds: int = 86400,
+    timeout_sec: float = 1.2,
+    fetcher: Callable[[str, float], dict[str, Any]] | None = None,
+    force: bool = False,
+    home_dir: Path | None = None,
+) -> dict[str, Any] | None:
+    """Throttled, offline-safe npm version check returning UPDATE_AVAILABLE directive when newer stable release exists."""
+    if os.environ.get("WORSHIP_NO_UPDATE_CHECK") == "1":
+        return None
+    if not force and fetcher is None and "PYTEST_CURRENT_TEST" in os.environ:
+        return None
+
+    s_dir = (skill_dir or SKILL_DIR).resolve()
+    installed = get_installed_skill_version(s_dir)
+    state_dir = get_local_state_dir(s_dir, home_dir=home_dir)
+    c_path = cache_path or (state_dir / "_cache" / "update_check.json")
+    now = time.time()
+
+    latest: str | None = None
+    used_cache = False
+    if not force and c_path.exists():
+        try:
+            cached = json.loads(c_path.read_text(encoding="utf-8"))
+            if now - float(cached.get("checked_at", 0)) < ttl_seconds:
+                latest = cached.get("latest_version")
+                used_cache = True
+        except Exception:
+            pass
+
+    if not used_cache:
+        try:
+            if fetcher is not None:
+                data = fetcher(NPM_LATEST_URL, timeout_sec)
+            else:
+                req = urllib.request.Request(
+                    NPM_LATEST_URL,
+                    headers={
+                        "Accept": "application/json",
+                        "User-Agent": f"korean-worship-setlist/{installed}",
+                    },
+                )
+                with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
+                    data = json.loads(resp.read().decode("utf-8"))
+            raw_ver = data.get("version") if isinstance(data, dict) else None
+            latest = str(raw_ver).strip() if raw_ver else None
+            if cache_path is not None or state_dir.exists():
+                try:
+                    c_path.parent.mkdir(parents=True, exist_ok=True)
+                    c_path.write_text(
+                        json.dumps({"checked_at": now, "latest_version": latest}, ensure_ascii=False),
+                        encoding="utf-8",
+                    )
+                except Exception:
+                    pass
+        except Exception:
+            if cache_path is not None or state_dir.exists():
+                try:
+                    c_path.parent.mkdir(parents=True, exist_ok=True)
+                    c_path.write_text(
+                        json.dumps({"checked_at": now - ttl_seconds + 21600, "latest_version": None}, ensure_ascii=False),
+                        encoding="utf-8",
+                    )
+                except Exception:
+                    pass
+            return None
+
+    inst_t = _parse_semver_tuple(installed)
+    lat_t = _parse_semver_tuple(latest)
+    if inst_t and lat_t and lat_t > inst_t:
+        latest_clean = str(latest).strip().lstrip("v")
+        cmd = _resolve_upgrade_command(s_dir, home_dir=home_dir)
+        return {
+            "directive": "UPDATE_AVAILABLE",
+            "installed_version": installed,
+            "latest_version": latest_clean,
+            "upgrade_command": cmd,
+            "message": (
+                f"새 버전(v{latest_clean}, 현재 v{installed})이 출시되었습니다. "
+                f"`{cmd}`로 교회 데이터를 유지한 채 업데이트할 수 있습니다."
+            ),
+        }
+    return None

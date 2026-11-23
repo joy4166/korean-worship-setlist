@@ -6,6 +6,8 @@ description: >-
   찬양팀 세팅), swapping a song or Key in rehearsal (update, 부분 수정), tracking
   setlist history or 6-week cooldowns (history, 쿨타임, 신곡 정착), or verifying,
   transposing, and stamping worship sheet music.
+metadata:
+  version: "0.1.2"
 ---
 
 # Korean Worship Setlist (`korean-worship-setlist`)
@@ -31,6 +33,7 @@ description: >-
   ```
 - **DB 2원화 & 전역 설치 상태 격리**: 공용 메타(`$SKILL_DIR/data/worship.db`: 고유 3,538곡 / 팀별 편곡 5,463개)는 읽기 전용으로 공유하고, 교회 전용 상태(`user_config.json`, `church_local.db`, `_raster_cache`)는 워크스페이스 로컬 설치 시 `$SKILL_DIR/data/`에, 전역 스킬·플러그인(`~/.gemini/config/`, `~/.agents/`, `~/.claude/`, `node_modules/`) 설치 시 현재 워크스페이스 루트의 `<워크스페이스>/.worship-setlist/`에 자동 격리 저장됩니다.
 - **저작권·신학 안전**: ① 15자(`first_line_incipit`/`chorus_incipit`)를 초과하는 **가사 원문은 DB·JSON·Markdown·TXT·응답 어디에도 저장·출력하지 않습니다.** ② `data/blocked_sources.json`(이단·논란 단체) 통과 필수, 유료/로그인/워터마크 악보 무단 수집 금지.
+- **비차단 업데이트 알림 (`update_available`)**: `init_profile.py --inspect` 또는 `search_candidates.py` 출력 JSON에 `update_available`(`UPDATE_AVAILABLE`)이 포함되면 본 작업을 멈추지 말고 **응답 하단에 1줄로 최신 버전 출시와 `upgrade_command`를 안내**합니다(`WORSHIP_NO_UPDATE_CHECK=1`로 비활성화 가능).
 - **카탈로그 구축·오디오·수집 보조 스크립트**: DB 재초기화·유튜브 챕터 수집·오디오 BPM/Key 분석·E5 임베딩은 `init_db.py`, `build_bulk_catalog.py`, `collect_youtube.py`, `analyze_audio.py`, `enrich_metadata.py` 각 `--help`를 참조하세요.
 
 ## Commands & Routing

@@ -15,9 +15,11 @@ from common import (
     GROOVE_SUBDIVISION_FAMILY,
     LOCAL_DB_PATH,
     WORSHIP_DB_PATH,
+    check_skill_update,
     clamp_to_vocal_range,
     configure_utf8_stdio,
     connect_dbs,
+    get_installed_skill_version,
     load_user_config,
     normalize_groove_style,
     normalize_scripture_ref,
@@ -418,6 +420,39 @@ def search_setlist_candidates(
                     if nt and k_g:
                         local_sheet_keys.setdefault(nt, set()).add(parse_key_signature(k_g)[1])
 
+    # Precompute song-invariant JSON fields and vocal-range transposition once per song (not 4x per slot)
+    for pick in chosen_arrs:
+        pick["_seasons"] = json.loads(pick["church_seasons"] or "[]")
+        pick["_service_slots"] = json.loads(pick["service_slots"] or "[]")
+        pick["_scripture_refs"] = json.loads(pick["scripture_refs"] or "[]")
+        pick["_stages"] = json.loads(pick["liturgical_stages"] or "[]")
+        pick["_sections"] = json.loads(pick["available_sections"] or "[]")
+        pick["_session_fit"] = json.loads(pick.get("session_fit") or "[]")
+
+        memo_str = str(pick.get("team_memo") or "")
+        effective_pref_key = (
+            pick["preferred_key"]
+            if (pick["preferred_key"] and (lock_past_keys or not memo_str.startswith("bootstrapped")))
+            else None
+        )
+        trans = clamp_to_vocal_range(
+            arrangement_key=pick["key_signature"],
+            highest_note=pick["highest_note"],
+            lowest_note=pick["lowest_note"],
+            vocal_floor=vocal_floor,
+            vocal_ceiling=vocal_ceiling,
+            leader_gender=leader_gender,
+            preferred_key=effective_pref_key,
+        )
+        pick["_trans"] = trans
+        if local_sheet_keys:
+            norm_t = pick.get("normalized_title") or normalize_title(pick["title_ko"])
+            pick["_local_match_bonus"] = (
+                0.08 if parse_key_signature(trans["target_key"])[1] in local_sheet_keys.get(norm_t, set()) else 0.0
+            )
+        else:
+            pick["_local_match_bonus"] = 0.0
+
     def score_for_slot(cand: dict[str, Any], slot: dict[str, Any], ignore_cooldown: bool = False) -> tuple[bool, float, dict[str, Any]]:
         if era_list and cand["era"] not in era_list:
             return False, -1.0, {}
@@ -433,12 +468,12 @@ def search_setlist_candidates(
         if is_small and cand["band_dependency"] == "high":
             return False, -1.0, {}
 
-        song_seasons = json.loads(cand["church_seasons"] or "[]")
+        song_seasons = cand["_seasons"]
         allowed_season, season_bonus = _season_adjustment(season, song_seasons, cand["theological_tone"], cand["tempo_tier"])
         if not allowed_season:
             return False, -1.0, {}
 
-        song_slots = json.loads(cand["service_slots"] or "[]")
+        song_slots = cand["_service_slots"]
         if single_slot and single_slot not in song_slots:
             return False, -1.0, {}
 
@@ -462,9 +497,9 @@ def search_setlist_candidates(
         # Semantic & keyword relevance
         sem_score = e5_scores.get(cand["id"], 0.0)
         fts_score = fts_scores.get(cand["id"], 0.0)
-        song_refs = json.loads(cand["scripture_refs"] or "[]")
+        song_refs = cand["_scripture_refs"]
         ref_match = 1.0 if scripture_chap and any(scripture_book_chapter(sr) == scripture_chap for sr in song_refs) else 0.0
-        stages = json.loads(cand["liturgical_stages"] or "[]")
+        stages = cand["_stages"]
         stage_match = 1.0 if slot["stage"] in stages else 0.3
         tempo_match = 1.0 if cand["tempo_tier"] in slot["tempo_tiers"] else 0.15
         slot_pref_match = 0.25 if any(sp in song_slots for sp in slot.get("service_slot_pref", [])) else 0.0
@@ -481,9 +516,9 @@ def search_setlist_candidates(
             familiarity_score += 0.18
 
         seeker_bonus = 0.15 if (seeker_emphasis and cand["lyric_accessibility"] == "easy_seeker") else 0.0
-        bridge_bonus = 0.12 if (preset.get("prefer_bridge") and "B" in json.loads(cand["available_sections"] or "[]")) else 0.0
+        bridge_bonus = 0.12 if (preset.get("prefer_bridge") and "B" in cand["_sections"]) else 0.0
         small_bonus = 0.12 if (is_small and cand["band_dependency"] == "low") else 0.0
-        session_fit_list = json.loads(cand.get("session_fit") or "[]")
+        session_fit_list = cand["_session_fit"]
         session_bonus = 0.08 if session_target in session_fit_list else 0.0
         intergen_bonus = 0.0
         if intergenerational:
@@ -503,28 +538,8 @@ def search_setlist_candidates(
             if cand["category"] == "modern_worship" and cand["era"] in ("2010s", "2020s"):
                 intergen_bonus += 0.15
 
-        # Auto transposition instead of dropping above vocal_ceiling.
-        # Explicit user-set preferred_key (set-repertoire) is always honored; bootstrapped sheet keys require lock_past_keys=True.
-        memo_str = str(cand.get("team_memo") or "")
-        effective_pref_key = (
-            cand["preferred_key"]
-            if (cand["preferred_key"] and (lock_past_keys or not memo_str.startswith("bootstrapped")))
-            else None
-        )
-        trans = clamp_to_vocal_range(
-            arrangement_key=cand["key_signature"],
-            highest_note=cand["highest_note"],
-            lowest_note=cand["lowest_note"],
-            vocal_floor=vocal_floor,
-            vocal_ceiling=vocal_ceiling,
-            leader_gender=leader_gender,
-            preferred_key=effective_pref_key,
-        )
-        local_match_bonus = (
-            0.08
-            if parse_key_signature(trans["target_key"])[1] in local_sheet_keys.get(normalize_title(cand["title_ko"]), set())
-            else 0.0
-        )
+        trans = cand["_trans"]
+        local_match_bonus = cand["_local_match_bonus"]
 
         # Small ensemble intro compression note
         song_form = cand["arrangement_song_form"] or cand["default_song_form"] or ""
@@ -571,18 +586,18 @@ def search_setlist_candidates(
             "time_signature": cand["time_signature"],
             "bpm": cand["bpm"],
             "tempo_tier": cand["tempo_tier"],
-            "groove_style": normalize_groove_style(cand.get("groove_style")),
+            "groove_style": cand.get("groove_style"),
             "bpm_source": cand.get("bpm_source", "manual_seed"),
             "intro_first_chord": cand["intro_first_chord"],
             "outro_last_chord": cand["outro_last_chord"],
             "ending_type": cand["ending_type"],
-            "available_sections": json.loads(cand["available_sections"] or "[]"),
+            "available_sections": list(cand["_sections"]),
             "song_form": song_form,
             "liturgical_stage": slot["stage"],
             "theological_tone": cand["theological_tone"],
             "theological_core": cand["theological_core"],
             "caution_nuance": cand["caution_nuance"],
-            "scripture_refs": song_refs,
+            "scripture_refs": list(song_refs),
             "familiarity": fam,
             "adoption_tier": cand["adoption_tier"],
             "band_dependency": cand["band_dependency"],
@@ -760,7 +775,7 @@ def search_setlist_candidates(
             "liturgical_stage": "dedication",
         }
 
-    return {
+    result: dict[str, Any] = {
         "service_type": service_type,
         "church_season": season,
         "cooldown_scope": scope,
@@ -770,12 +785,17 @@ def search_setlist_candidates(
         "scripture_input": norm_scripture,
         "duration_min": duration_min,
         "estimated_total_minutes": est_total if duration_min is not None else None,
+        "skill_version": get_installed_skill_version(),
         "pre_sermon": pre_sermon_results,
         "post_sermon": {
             "reprise_candidate": reprise_base,
             "prayer_chord_loops": ["IV - V - iii - vi", "ii7 - V7sus4 - Imaj7"],
         },
     }
+    upd = check_skill_update()
+    if upd is not None:
+        result["update_available"] = upd
+    return result
 
 
 def main() -> None:

@@ -84,9 +84,14 @@ npx korean-worship-setlist install --claude --global
 # 공용 ~/.agents/skills/ 전역 설치 및 사용자 지정 경로(`--dest`) 설치
 npx korean-worship-setlist install --agents --global
 npx korean-worship-setlist install --dest ./custom-path
+
+# 최신 버전으로 업데이트 (교회별 user_config.json · church_local.db 유지)
+npx korean-worship-setlist@latest update          # 워크스페이스 스킬
+npx korean-worship-setlist@latest update --global # 전역 스킬 (--plugin / --claude 동일 지원)
+npx korean-worship-setlist check                  # 설치 버전과 npm 최신 버전 비교 확인
 ```
 
-- **업그레이드 안전성**: 기존 설치 경로에 다시 `npx korean-worship-setlist install`을 실행해도 교회별 `user_config.json` 및 `church_local.db`는 덮어쓰지 않고 보존합니다.
+- **업그레이드 안전성 · 자동 업데이트 알림**: 기존 설치 경로에 다시 `npx korean-worship-setlist install` 또는 `update`를 실행해도 교회별 `user_config.json` 및 `church_local.db`는 덮어쓰지 않고 보존합니다. 또한 `init_profile.py --inspect`·`search_candidates.py` 실행 시 24시간 주기로 npm 최신 버전을 비차단(오프라인 시 조용히 생략) 확인해 새 버전이 있으면 `UPDATE_AVAILABLE`로 알려줍니다(`WORSHIP_NO_UPDATE_CHECK=1`로 비활성화 가능).
 - **전역 스킬·플러그인 상태 격리**: `--global`·`--plugin`·`--agents --global` 등으로 전역 설치한 뒤 워크스페이스 루트(`cwd`)에서 실행하면, 공용 카탈로그(`$SKILL_DIR/data/worship.db`)는 읽기 전용으로 공유하고 교회별 상태(`user_config.json`, `church_local.db`, `_raster_cache`)는 현재 워크스페이스의 `<workspace>/.worship-setlist/`에 자동 분리 저장됩니다.
 
 ### 2. Python 런타임 환경 설치 (`uv`)

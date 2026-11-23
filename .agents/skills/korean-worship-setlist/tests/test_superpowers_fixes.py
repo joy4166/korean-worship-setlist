@@ -841,6 +841,138 @@ def test_rhythm_groove_transitions_and_vision_self_healing(
     assert healed["bpm_source"] == "local_sheet_verified"
 
 
+def test_skill_update_notifier_throttling_offline_safety_and_cli_update(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import subprocess
+
+    fake_home = tmp_path / "home"
+    ws_dir = tmp_path / "ws"
+    fake_home.mkdir()
+    ws_dir.mkdir()
+
+    ws_skill = ws_dir / ".agents" / "skills" / "korean-worship-setlist"
+    global_skill = fake_home / ".gemini" / "config" / "skills" / "korean-worship-setlist"
+    global_plugin = fake_home / ".gemini" / "config" / "plugins" / "korean-worship-setlist" / "skills" / "korean-worship-setlist"
+    claude_global = fake_home / ".claude" / "skills" / "korean-worship-setlist"
+
+    for sdir in (ws_skill, global_skill, global_plugin, claude_global):
+        sdir.mkdir(parents=True)
+        (sdir / "pyproject.toml").write_text('[project]\nname = "korean-worship-setlist"\nversion = "0.1.1"\n', encoding="utf-8")
+
+    cache_file = tmp_path / "update_check.json"
+
+    # 1. Newer stable version returns UPDATE_AVAILABLE and populates cache
+    monkeypatch.delenv("WORSHIP_NO_UPDATE_CHECK", raising=False)
+    calls = {"count": 0}
+
+    def _fetch_020(url: str, timeout: float) -> dict[str, object]:
+        calls["count"] += 1
+        return {"version": "0.2.0"}
+
+    upd = common.check_skill_update(
+        ws_skill,
+        cache_path=cache_file,
+        fetcher=_fetch_020,
+        home_dir=fake_home,
+    )
+    assert upd is not None
+    assert upd["directive"] == "UPDATE_AVAILABLE"
+    assert upd["installed_version"] == "0.1.1"
+    assert upd["latest_version"] == "0.2.0"
+    assert upd["upgrade_command"] == "npx korean-worship-setlist@latest update"
+    assert cache_file.exists()
+    assert calls["count"] == 1
+
+    # 2. 24h throttle skips network fetcher completely
+    def _should_not_run(url: str, timeout: float) -> dict[str, object]:
+        raise AssertionError("should not fetch while cache is fresh")
+
+    upd_cached = common.check_skill_update(
+        ws_skill,
+        cache_path=cache_file,
+        fetcher=_should_not_run,
+        home_dir=fake_home,
+    )
+    assert upd_cached is not None
+    assert upd_cached["latest_version"] == "0.2.0"
+
+    # 3. Context-aware upgrade commands for global / plugin / claude global installs
+    assert (
+        common.check_skill_update(global_skill, cache_path=cache_file, fetcher=_should_not_run, home_dir=fake_home)["upgrade_command"]
+        == "npx korean-worship-setlist@latest update --global"
+    )
+    assert (
+        common.check_skill_update(global_plugin, cache_path=cache_file, fetcher=_should_not_run, home_dir=fake_home)["upgrade_command"]
+        == "npx korean-worship-setlist@latest update --plugin"
+    )
+    assert (
+        common.check_skill_update(claude_global, cache_path=cache_file, fetcher=_should_not_run, home_dir=fake_home)["upgrade_command"]
+        == "npx korean-worship-setlist@latest update --claude --global"
+    )
+
+    # 4. Pre-releases and equal/older versions are ignored (return None)
+    for bad_ver in ("0.0.0-stage", "0.2.0-beta.1", "0.1.1", "0.1.0"):
+        assert (
+            common.check_skill_update(
+                ws_skill,
+                cache_path=tmp_path / f"cache_{bad_ver}.json",
+                fetcher=lambda u, t, v=bad_ver: {"version": v},
+                force=True,
+                home_dir=fake_home,
+            )
+            is None
+        )
+
+    # 5. Offline failures return None silently and write backoff cache
+    offline_cache = tmp_path / "offline_cache.json"
+
+    def _raise_offline(url: str, timeout: float) -> dict[str, object]:
+        raise OSError("network down")
+
+    assert (
+        common.check_skill_update(
+            ws_skill,
+            cache_path=offline_cache,
+            fetcher=_raise_offline,
+            force=True,
+            home_dir=fake_home,
+        )
+        is None
+    )
+    assert offline_cache.exists()
+
+    # 6. Opt-out via env var
+    monkeypatch.setenv("WORSHIP_NO_UPDATE_CHECK", "1")
+    assert common.check_skill_update(ws_skill, cache_path=cache_file, fetcher=_should_not_run, home_dir=fake_home) is None
+    monkeypatch.delenv("WORSHIP_NO_UPDATE_CHECK", raising=False)
+
+    # 7. Node CLI `update --dest` upgrades skill files while preserving church user_config.json & church_local.db
+    dest_skill = tmp_path / "existing_skill"
+    (dest_skill / "data").mkdir(parents=True)
+    (dest_skill / "pyproject.toml").write_text('[project]\nname = "korean-worship-setlist"\nversion = "0.1.0"\n', encoding="utf-8")
+    (dest_skill / "data" / "user_config.json").write_text('{"team_name": "보존확인"}', encoding="utf-8")
+    (dest_skill / "data" / "church_local.db").write_bytes(b"KEEP_LOCAL_DB")
+
+    repo_root = common.SKILL_DIR.parent.parent.parent
+    cli_path = repo_root / "bin" / "korean-worship-setlist.mjs"
+    proc = subprocess.run(
+        ["node", str(cli_path), "update", "--dest", str(dest_skill)],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=False,
+    )
+    expected_ver = common.get_installed_skill_version()
+    assert proc.returncode == 0, proc.stderr
+    assert f"(v0.1.0 -> v{expected_ver})" in proc.stdout
+    assert f'version = "{expected_ver}"' in (dest_skill / "pyproject.toml").read_text(encoding="utf-8")
+    assert json.loads((dest_skill / "data" / "user_config.json").read_text(encoding="utf-8"))["team_name"] == "보존확인"
+    assert (dest_skill / "data" / "church_local.db").read_bytes() == b"KEEP_LOCAL_DB"
+
+
+
 
 
 
