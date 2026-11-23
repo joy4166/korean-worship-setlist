@@ -29,7 +29,7 @@ description: >-
   $env:PYTHONPATH = "$SKILL_DIR/scripts;$SKILL_DIR/.venv/Lib/site-packages"
   & $py "$SKILL_DIR/scripts/<name>.py" --help
   ```
-- **DB 2원화 & 전역 설치 상태 격리**: 공용 메타(`$SKILL_DIR/data/worship.db`: 3,538곡/5,470편곡)는 읽기 전용으로 공유하고, 교회 전용 상태(`user_config.json`, `church_local.db`, `_raster_cache`)는 워크스페이스 로컬 설치 시 `$SKILL_DIR/data/`에, 전역 스킬·플러그인(`~/.gemini/config/`, `~/.agents/`, `~/.claude/`, `node_modules/`) 설치 시 현재 워크스페이스 루트의 `<워크스페이스>/.worship-setlist/`에 자동 격리 저장됩니다.
+- **DB 2원화 & 전역 설치 상태 격리**: 공용 메타(`$SKILL_DIR/data/worship.db`: 고유 3,538곡 / 팀별 편곡 5,463개)는 읽기 전용으로 공유하고, 교회 전용 상태(`user_config.json`, `church_local.db`, `_raster_cache`)는 워크스페이스 로컬 설치 시 `$SKILL_DIR/data/`에, 전역 스킬·플러그인(`~/.gemini/config/`, `~/.agents/`, `~/.claude/`, `node_modules/`) 설치 시 현재 워크스페이스 루트의 `<워크스페이스>/.worship-setlist/`에 자동 격리 저장됩니다.
 - **저작권·신학 안전**: ① 15자(`first_line_incipit`/`chorus_incipit`)를 초과하는 **가사 원문은 DB·JSON·Markdown·TXT·응답 어디에도 저장·출력하지 않습니다.** ② `data/blocked_sources.json`(이단·논란 단체) 통과 필수, 유료/로그인/워터마크 악보 무단 수집 금지.
 - **카탈로그 구축·오디오·수집 보조 스크립트**: DB 재초기화·유튜브 챕터 수집·오디오 BPM/Key 분석·E5 임베딩은 `init_db.py`, `build_bulk_catalog.py`, `collect_youtube.py`, `analyze_audio.py`, `enrich_metadata.py` 각 `--help`를 참조하세요.
 
@@ -94,6 +94,9 @@ description: >-
     {
       "slot_index": 1,
       "verified_key": "G",
+      "verified_time_signature": "4/4",
+      "verified_bpm": 124,
+      "verified_groove": "shuffle_bounce",
       "verified_sections": ["I", "V1", "PC", "C"],
       "confirmed_song_form": "I(4m) - V1 - PC - C(x2)",
       "key_mismatch_action": "ok",
@@ -108,7 +111,7 @@ description: >-
   & $py "$SKILL_DIR/scripts/find_sheets.py" `
     --setlist setlist_plan.json --vision-file vision_verifications.json --output matched_sheets.json
   ```
-- **Key 불일치 2분기**: `[A]` 악보 실제 Key를 따르려면 `key_mismatch_action`을 `"recalculate"`로 지정합니다(`plan_transitions.py` 재실행 금지 — `find_sheets.py`가 `setlist_plan.json`의 Key·이조폭·세션 전조를 자동 재계산). `[B]` 기존 목표 Key를 유지하려면 `"stamp_transpose_warning"`을 지정합니다. `lyrics_theology_ok: false`인 악보는 PDF 생성이 자동 차단됩니다.
+- **Key · 리듬 불일치 2분기 & 자가 학습**: `[A]` 악보 실제 Key를 따르려면 `key_mismatch_action`을 `"recalculate"`로 지정합니다(`plan_transitions.py` 재실행 금지 — `find_sheets.py`가 `setlist_plan.json`의 Key·이조폭·세션 전조를 자동 재계산). 악보 상단에 `Shuffle`/`Bounce`/`♫=♪³`/`16beat`/`Go-Go` 등 리듬이나 BPM·박자 표기가 보이면 `verified_groove`, `verified_bpm`, `verified_time_signature`를 함께 기록하세요(`find_sheets.py`가 `rhythm_reset` 등 전환을 즉시 재계산하고 `church_local.db`에 저장해 이후 콘티에 자가 학습 반영). `[B]` 기존 목표 Key를 유지하려면 `"stamp_transpose_warning"`을 지정합니다. `lyrics_theology_ok: false`인 악보는 PDF 생성이 자동 차단됩니다.
 
 ### 6단계: 배너 스탬핑(`stamp_sheets.py`) & 확정 이력 저장(`manage_history.py`)
 ```powershell

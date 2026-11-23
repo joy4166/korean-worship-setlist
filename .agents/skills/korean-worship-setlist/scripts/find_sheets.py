@@ -22,6 +22,7 @@ from common import (
     is_blocked_source,
     json_dumps_ko,
     load_user_config,
+    normalize_groove_style,
     normalize_title,
     parse_key_signature,
     resolve_workspace_path,
@@ -294,6 +295,7 @@ def apply_vision_verification(
     conn = connect_dbs(worship_db_path, l_db, attach_local=True, ensure_schemas=True)
 
     recalc_slots: set[int] = set()
+    rhythm_recalc_slots: set[int] = set()
     with conn:
         for sheet in matched_data.get("sheets", []):
             slot_idx = int(sheet["slot_index"])
@@ -309,6 +311,10 @@ def apply_vision_verification(
 
             v_key = parse_key_signature(v.get("verified_key") or sheet.get("sheet_key") or sheet["target_key"])[0]
             v_sections = v.get("verified_sections") or sheet.get("verified_sections", [])
+            v_groove = normalize_groove_style(v.get("verified_groove")) if v.get("verified_groove") else None
+            v_bpm = int(v["verified_bpm"]) if v.get("verified_bpm") is not None else None
+            v_time_sig = str(v["verified_time_signature"]).strip() if v.get("verified_time_signature") else None
+
             action = v.get("key_mismatch_action")
             if action == "recalculate_transitions":
                 action = "recalculate"
@@ -323,6 +329,12 @@ def apply_vision_verification(
             sheet["lyrics_theology_ok"] = lyrics_ok
             sheet["vision_verified"] = lyrics_ok
             sheet["key_mismatch"] = mismatch
+            if v_groove is not None:
+                sheet["verified_groove"] = v_groove
+            if v_bpm is not None:
+                sheet["verified_bpm"] = v_bpm
+            if v_time_sig is not None:
+                sheet["verified_time_signature"] = v_time_sig
             if v.get("score_annotations") is not None:
                 sheet["score_annotations"] = list(v["score_annotations"])
             if v.get("meter_note"):
@@ -352,15 +364,34 @@ def apply_vision_verification(
                 sheet["target_key"] = v_key
                 sheet["key_mismatch"] = False
 
+            if v_groove is not None or v_bpm is not None or v_time_sig is not None:
+                rhythm_recalc_slots.add(slot_idx)
+
             if sheet.get("source_file"):
+                prev_cache = conn.execute(
+                    """
+                    SELECT detected_time_signature, detected_bpm, detected_groove
+                    FROM local_db.sheet_cache
+                    WHERE song_slug = ? AND file_path = ?
+                    ORDER BY id DESC LIMIT 1
+                    """,
+                    (sheet["song_slug"], sheet["source_file"]),
+                ).fetchone()
+                eff_time_sig = v_time_sig if v_time_sig is not None else (prev_cache["detected_time_signature"] if prev_cache else None)
+                eff_bpm = v_bpm if v_bpm is not None else (prev_cache["detected_bpm"] if prev_cache else None)
+                eff_groove = v_groove if v_groove is not None else (prev_cache["detected_groove"] if prev_cache else None)
+
                 conn.execute(
                     "DELETE FROM local_db.sheet_cache WHERE song_slug = ? AND file_path = ?",
                     (sheet["song_slug"], sheet["source_file"]),
                 )
                 conn.execute(
                     """
-                    INSERT INTO local_db.sheet_cache (song_slug, file_path, detected_key, page_count, verified_sections_json)
-                    VALUES (?, ?, ?, ?, ?)
+                    INSERT INTO local_db.sheet_cache (
+                        song_slug, file_path, detected_key, page_count, verified_sections_json,
+                        detected_time_signature, detected_bpm, detected_groove
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         sheet["song_slug"],
@@ -368,6 +399,9 @@ def apply_vision_verification(
                         v_key,
                         int(sheet.get("page_count", 1)),
                         json_dumps_ko(v_sections),
+                        eff_time_sig,
+                        eff_bpm,
+                        eff_groove,
                     ),
                 )
     conn.close()
@@ -382,7 +416,7 @@ def apply_vision_verification(
         for v in ver_by_slot.values()
     )
     updated_plan = setlist_plan
-    if setlist_plan is not None and (recalc_slots or has_form_updates):
+    if setlist_plan is not None and (recalc_slots or rhythm_recalc_slots or has_form_updates):
         updated_plan = json.loads(json.dumps(setlist_plan, ensure_ascii=False))
         songs = updated_plan.get("songs", [])
         for song in songs:
@@ -399,6 +433,18 @@ def apply_vision_verification(
                     song["available_sections"] = list(v["verified_sections"])
                 if v.get("confirmed_song_form"):
                     song["song_form"] = v["confirmed_song_form"]
+                v_gr = normalize_groove_style(v.get("verified_groove")) if v.get("verified_groove") else None
+                if v_gr is not None:
+                    song["groove_style"] = v_gr
+                    song["bpm_source"] = "sheet_verified"
+                if v.get("verified_bpm") is not None:
+                    v_bpm_val = int(v["verified_bpm"])
+                    song["bpm"] = v_bpm_val
+                    song["tempo_tier"] = "fast" if v_bpm_val >= 100 else ("medium" if v_bpm_val >= 80 else "ballad")
+                    song["bpm_source"] = "sheet_verified"
+                if v.get("verified_time_signature"):
+                    song["time_signature"] = str(v["verified_time_signature"]).strip()
+                    song["bpm_source"] = "sheet_verified"
                 for field in ("meter_note", "chorus_incipit", "ensemble_note", "caution_nuance"):
                     if v.get(field) is not None:
                         song[field] = v[field]
@@ -414,12 +460,12 @@ def apply_vision_verification(
                     rep["key_shift"] = rep_match.get("key_shift", 0)
                     rep["capo_info"] = rep_match.get("capo_info")
 
-        if recalc_slots:
+        if recalc_slots or rhythm_recalc_slots:
             skill_tier = updated_plan.get("session_skill_tier", "intermediate")
             inst_list = updated_plan.get("session_instruments")
             if inst_list is None:
                 inst_list = load_user_config().get("session_instruments")
-            updated_plan["transitions"] = [
+            new_transitions = [
                 evaluate_transition(
                     songs[i],
                     songs[i + 1],
@@ -430,6 +476,20 @@ def apply_vision_verification(
                 )
                 for i in range(len(songs) - 1)
             ]
+            for i, tr in enumerate(new_transitions):
+                s_v = ver_by_slot.get(int(songs[i]["slot_index"]), {})
+                if (
+                    tr["transition_mode"] == "rhythm_reset"
+                    and not s_v.get("confirmed_song_form")
+                    and re.search(r"-->\s*\(Medley", str(songs[i].get("song_form") or ""), re.IGNORECASE)
+                ):
+                    songs[i]["song_form"] = re.sub(
+                        r"\s*-->\s*\(Medley[^)]*\)",
+                        " - O",
+                        str(songs[i]["song_form"]),
+                        flags=re.IGNORECASE,
+                    ).strip()
+            updated_plan["transitions"] = new_transitions
 
     return matched_data, updated_plan
 

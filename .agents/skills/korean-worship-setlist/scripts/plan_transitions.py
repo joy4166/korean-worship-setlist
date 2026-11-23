@@ -9,10 +9,13 @@ from pathlib import Path
 from typing import Any
 
 from common import (
+    GROOVE_LABELS_KO,
+    GROOVE_SUBDIVISION_FAMILY,
     MAJOR_NAMES,
     configure_utf8_stdio,
     is_within_vocal_range,
     load_user_config,
+    normalize_groove_style,
     parse_key_signature,
     semitone_distance,
     transpose_key,
@@ -178,6 +181,31 @@ def get_capo_info(key_sig: str) -> dict[str, Any]:
     return {"capo": 0, "guitar_shape": f"{major_key} 폼", "label": "No Capo"}
 
 
+def _evaluate_groove_compatibility(groove_a: str | None, groove_b: str | None) -> tuple[bool, float, str]:
+    """Check whether adjacent songs share compatible rhythmic subdivision vs requiring a rhythm_reset."""
+    ga = normalize_groove_style(groove_a)
+    gb = normalize_groove_style(groove_b)
+    if not ga or not gb:
+        return False, 0.0, ""
+    fam_a = GROOVE_SUBDIVISION_FAMILY.get(ga, "neutral")
+    fam_b = GROOVE_SUBDIVISION_FAMILY.get(gb, "neutral")
+    if fam_a == "neutral" or fam_b == "neutral" or fam_a == fam_b:
+        return False, 0.0, ""
+
+    pair = {fam_a, fam_b}
+    if "triplet_shuffle" in pair:
+        return True, 1.8, ""
+    if "compound_triple" in pair:
+        return True, 2.0, ""
+    if "gogo_2beat" in pair:
+        cost = 1.4 if "straight_16th" in pair else 1.1
+        return True, cost, ""
+
+    lbl_a = GROOVE_LABELS_KO.get(ga) or ga
+    lbl_b = GROOVE_LABELS_KO.get(gb) or gb
+    return False, 0.35, f"그루브 변환({lbl_a} -> {lbl_b})"
+
+
 def evaluate_transition(
     song_a: dict[str, Any],
     song_b: dict[str, Any],
@@ -186,7 +214,7 @@ def evaluate_transition(
     skill_tier: str = "intermediate",
     session_instruments: list[str] | None = None,
 ) -> dict[str, Any]:
-    """Compute harmonic + meter + BPM + capo cost and transition mode ('segue' vs 'pad_break')."""
+    """Compute harmonic + meter + BPM + groove + capo cost and transition mode ('segue' | 'rhythm_reset' | 'pad_break')."""
     _, maj_a, pc_a, _ = parse_key_signature(key_a)
     _, maj_b, pc_b, _ = parse_key_signature(key_b)
     diff = (pc_b - pc_a) % 12
@@ -231,9 +259,31 @@ def evaluate_transition(
         if capo_changed:
             capo_warning = f"카포 이동 필요 ({capo_a['label']} -> {capo_b['label']})"
 
-    # Determine segue vs pad_break
+    requires_rhythm_reset, groove_cost, groove_shift_cue = _evaluate_groove_compatibility(
+        song_a.get("groove_style"),
+        song_b.get("groove_style"),
+    )
+    ga_norm = normalize_groove_style(song_a.get("groove_style"))
+    gb_norm = normalize_groove_style(song_b.get("groove_style"))
+
+    # Determine segue vs rhythm_reset vs pad_break
     force_pad = meter_changed or (bpm_gap >= 25) or (diff == 6) or (capo_changed and skill_tier == "beginner_friendly")
-    mode = "pad_break" if force_pad else "segue"
+    unverified_rhythm = (
+        not force_pad
+        and not requires_rhythm_reset
+        and (
+            (song_a.get("bpm_source") == "catalog_estimated" and not ga_norm)
+            or (song_b.get("bpm_source") == "catalog_estimated" and not gb_norm)
+        )
+        and (song_a.get("tempo_tier") == "fast" or song_b.get("tempo_tier") == "fast")
+    )
+
+    if force_pad:
+        mode = "pad_break"
+    elif requires_rhythm_reset:
+        mode = "rhythm_reset"
+    else:
+        mode = "segue"
 
     bridge = compute_bridge_chords(
         prev_outro_chord=song_a.get("outro_last_chord"),
@@ -250,6 +300,11 @@ def evaluate_transition(
         "드럼 카운트/필인"
         if (not has_inst_cfg or "drums" in session_instruments)
         else ("건반/기타 리드" if has_guitar else "피아노 리드")
+    )
+    count_in_label = (
+        "드럼 하이햇/스틱 4박 카운트"
+        if (not has_inst_cfg or "drums" in session_instruments)
+        else ("건반/기타 4박 리듬 카운트" if has_guitar else "피아노 4박 리듬 리드")
     )
 
     cues: list[str] = []
@@ -268,14 +323,28 @@ def evaluate_transition(
             cues.append(capo_warning)
         if diff == 6:
             cues.append("원격조(증4도) 전환: 전조 코드 대신 패드 호흡 후 진입")
+    elif mode == "rhythm_reset":
+        ga_lbl = GROOVE_LABELS_KO.get(ga_norm or "") or (song_a.get("groove_style") or "앞곡 리듬")
+        gb_lbl = GROOVE_LABELS_KO.get(gb_norm or "") or (song_b.get("groove_style") or "뒷곡 리듬")
+        cues.append(f"[리듬 리셋 전환] 앞곡 정박 엔딩({ga_lbl} -> {gb_lbl}) 후 {count_in_label}로 진입")
+        if diff != 0:
+            cues.append(f"전조 코드: {bridge['bridge_chords']}")
+        if abs(bpm_b - bpm_a) >= 5:
+            cues.append(f"템포 변경({bpm_a} -> {bpm_b} BPM)")
+        if capo_warning:
+            cues.append(capo_warning)
     else:
         cues.append(f"[바로 연결 Segue] {bridge['bridge_chords']}")
+        if groove_shift_cue:
+            cues.append(groove_shift_cue)
         if abs(bpm_b - bpm_a) >= 5:
             cues.append(f"템포 전환({bpm_a} -> {bpm_b} BPM {tempo_lead_label})")
         if capo_changed and skill_tier == "beginner_friendly":
             cues.append(f"주의: 기타 카포 이동 시간 확인 ({capo_a['label']} -> {capo_b['label']})")
+        if unverified_rhythm:
+            cues.append("리듬 미검증(DB 추정치): 악보의 셔플(♫=♪³)/스트레이트 일치 확인 — 다르면 정박 엔딩 후 4박 카운트 진입")
 
-    total_cost = round(key_cost + meter_cost + bpm_cost + difficulty_cost, 3)
+    total_cost = round(key_cost + meter_cost + bpm_cost + difficulty_cost + groove_cost + (0.25 if unverified_rhythm else 0.0), 3)
     return {
         "from_slot": int(song_a.get("slot_index", 0)),
         "to_slot": int(song_b.get("slot_index", 0)),
@@ -283,6 +352,9 @@ def evaluate_transition(
         "to_song": song_b["title_ko"],
         "from_key": key_a,
         "to_key": key_b,
+        "from_groove": ga_norm,
+        "to_groove": gb_norm,
+        "rhythm_unverified": unverified_rhythm,
         "transition_mode": mode,
         "relation": bridge["relation"],
         "bridge_chords": bridge["bridge_chords"],

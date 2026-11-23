@@ -251,12 +251,112 @@ CREATE TABLE IF NOT EXISTS {prefix}sheet_cache (
     detected_key TEXT NOT NULL,
     page_count INTEGER NOT NULL DEFAULT 1,
     verified_sections_json TEXT DEFAULT '[]',
+    detected_time_signature TEXT,
+    detected_bpm INTEGER,
+    detected_groove TEXT,
     verified_at TEXT DEFAULT (datetime('now'))
 );
 
 CREATE INDEX IF NOT EXISTS {prefix}idx_history_scope_date
     ON setlist_history(cooldown_scope, service_date);
 """
+
+GROOVE_SUBDIVISION_FAMILY: dict[str, str] = {
+    "shuffle_bounce": "triplet_shuffle",
+    "country_gogo": "gogo_2beat",
+    "16th_upbeat": "straight_16th",
+    "straight_8th": "straight_8th",
+    "rock_upbeat": "straight_8th",
+    "16th_ballad": "straight_ballad",
+    "6_8_worship": "compound_triple",
+    "acoustic": "neutral",
+}
+
+GROOVE_LABELS_KO: dict[str, str] = {
+    "shuffle_bounce": "셔플/바운스",
+    "country_gogo": "고고/컨트리",
+    "16th_upbeat": "16비트 스트레이트",
+    "straight_8th": "8비트 스트레이트",
+    "rock_upbeat": "업비트 록",
+    "16th_ballad": "16비트 발라드",
+    "6_8_worship": "6/8 워십",
+    "acoustic": "",
+}
+
+_GROOVE_ALIASES: dict[str, str] = {
+    "shuffle": "shuffle_bounce",
+    "shuffle_bounce": "shuffle_bounce",
+    "bounce": "shuffle_bounce",
+    "swing": "shuffle_bounce",
+    "16th_shuffle": "shuffle_bounce",
+    "triplet": "shuffle_bounce",
+    "셔플": "shuffle_bounce",
+    "바운스": "shuffle_bounce",
+    "스윙": "shuffle_bounce",
+    "셔플고고": "shuffle_bounce",
+    "셔플/바운스": "shuffle_bounce",
+    "country_gogo": "country_gogo",
+    "gogo": "country_gogo",
+    "go_go": "country_gogo",
+    "go-go": "country_gogo",
+    "country": "country_gogo",
+    "polka": "country_gogo",
+    "2beat": "country_gogo",
+    "고고": "country_gogo",
+    "컨트리": "country_gogo",
+    "투비트": "country_gogo",
+    "폴카": "country_gogo",
+    "고고/컨트리": "country_gogo",
+    "16th_upbeat": "16th_upbeat",
+    "funk_16th": "16th_upbeat",
+    "syncopated_16th": "16th_upbeat",
+    "16beat": "16th_upbeat",
+    "16비트": "16th_upbeat",
+    "펑키": "16th_upbeat",
+    "16비트스트레이트": "16th_upbeat",
+    "straight_8th": "straight_8th",
+    "straight": "straight_8th",
+    "8beat": "straight_8th",
+    "8비트": "straight_8th",
+    "스트레이트": "straight_8th",
+    "8비트스트레이트": "straight_8th",
+    "rock_upbeat": "rock_upbeat",
+    "modern_rock": "rock_upbeat",
+    "rock": "rock_upbeat",
+    "모던록": "rock_upbeat",
+    "업비트록": "rock_upbeat",
+    "16th_ballad": "16th_ballad",
+    "ballad": "16th_ballad",
+    "발라드": "16th_ballad",
+    "16비트발라드": "16th_ballad",
+    "6_8_worship": "6_8_worship",
+    "6/8": "6_8_worship",
+    "12/8": "6_8_worship",
+    "compound": "6_8_worship",
+    "6/8워십": "6_8_worship",
+    "acoustic": "acoustic",
+    "어쿠스틱": "acoustic",
+}
+
+
+def normalize_groove_style(raw: str | None) -> str | None:
+    """Normalize groove/rhythm hint strings to canonical groove_style keys."""
+    if raw is None:
+        return None
+    text = str(raw).strip().lower()
+    if not text:
+        return None
+    if text in GROOVE_SUBDIVISION_FAMILY:
+        return text
+    if text in _GROOVE_ALIASES:
+        return _GROOVE_ALIASES[text]
+    compact = text.replace(" ", "").replace("-", "_")
+    if compact in _GROOVE_ALIASES:
+        return _GROOVE_ALIASES[compact]
+    underscored = re.sub(r"[\s\-]+", "_", text)
+    if underscored in _GROOVE_ALIASES:
+        return _GROOVE_ALIASES[underscored]
+    return None
 
 PITCH_CLASSES: dict[str, int] = {
     "C": 0, "B#": 0,
@@ -484,6 +584,22 @@ def is_blocked_source(*texts: str | None, blocked: dict[str, list[str]] | None =
     return False, None
 
 
+def _migrate_sheet_cache_columns(conn: sqlite3.Connection, prefix: str = "") -> None:
+    """Backward-compatibly add rhythm/tempo verification columns to existing sheet_cache tables."""
+    schema_prefix = f"{prefix.rstrip('.')}." if prefix else ""
+    existing = {row[1] for row in conn.execute(f"PRAGMA {schema_prefix}table_info(sheet_cache)").fetchall()}
+    if not existing:
+        return
+    migrations = {
+        "detected_time_signature": "TEXT",
+        "detected_bpm": "INTEGER",
+        "detected_groove": "TEXT",
+    }
+    for col, col_type in migrations.items():
+        if col not in existing:
+            conn.execute(f"ALTER TABLE {prefix}sheet_cache ADD COLUMN {col} {col_type}")
+
+
 def init_schema_on_connection(
     conn: sqlite3.Connection,
     include_worship: bool = True,
@@ -495,6 +611,7 @@ def init_schema_on_connection(
         conn.executescript(WORSHIP_SCHEMA_SQL)
     if include_local:
         conn.executescript(LOCAL_SCHEMA_TEMPLATE.format(prefix=local_prefix))
+        _migrate_sheet_cache_columns(conn, prefix=local_prefix)
 
 
 def connect_dbs(
@@ -520,6 +637,7 @@ def connect_dbs(
         if ensure_schemas:
             l_conn = sqlite3.connect(str(l_path))
             l_conn.executescript(LOCAL_SCHEMA_TEMPLATE.format(prefix=""))
+            _migrate_sheet_cache_columns(l_conn, prefix="")
             l_conn.commit()
             l_conn.close()
         escaped = str(l_path).replace("'", "''")

@@ -42,3 +42,7 @@
    - 실제 악보에 없는 `PC` 또는 `B`가 송폼에 들어갔다면 즉시 제거합니다.
 3. **일회성 가사-설교 정합성 및 건전성 확인 (DB 미저장)**:
    - 악보 위 가사 텍스트를 눈으로만 판독하여 ① 설교 본문·주제와의 신학적 정합성(화자·뉘앙스 오류 없음), ② 번안곡의 가사 버전 일치 여부, ③ 이단·불건전 개사 여부를 확인합니다. (확인한 가사 원문은 어떤 파일이나 DB에도 저장하지 않습니다.)
+4. **리듬(Groove)·박자·BPM 표기 판독 (`verified_groove`, `verified_bpm`, `verified_time_signature`)**:
+   - 악보 상단의 템포·리듬 힌트(`Shuffle`, `Bounce`, `♫=♪³`, `Country`, `Go-Go`, `16 beat`, `8 beat`, `Moderato`, `BPM`)와 박자표를 읽고 필요 시 `vision_verifications.json`에 함께 기록합니다.
+   - 표준 `verified_groove` 값: `shuffle_bounce` (셔플/바운스), `country_gogo` (고고/컨트리), `16th_upbeat` (16비트 스트레이트), `straight_8th` (8비트 스트레이트), `rock_upbeat` (업비트 록), `16th_ballad` (16비트 발라드), `6_8_worship` (6/8 워십).
+   - 셔플/바운스 ↔ 스트레이트 또는 고고 ↔ 16비트처럼 리듬 분박이 충돌하면 `find_sheets.py`가 자동으로 `rhythm_reset`(앞곡 정박 엔딩 후 4박 카운트 재진입) 전환을 재계산하고 `church_local.db`에 학습 저장합니다.

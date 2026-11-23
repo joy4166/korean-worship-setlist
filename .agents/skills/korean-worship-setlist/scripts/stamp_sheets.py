@@ -17,9 +17,11 @@ from reportlab.pdfgen import canvas
 
 from common import (
     FONT_PATH,
+    GROOVE_LABELS_KO,
     configure_utf8_stdio,
     json_dumps_ko,
     load_user_config,
+    normalize_groove_style,
     parse_key_signature,
     resolve_workspace_path,
     semitone_distance,
@@ -198,6 +200,12 @@ def _index_transitions_by_slot(setlist_plan: dict[str, Any]) -> dict[int, dict[s
     return by_slot
 
 
+def _format_meter_with_groove(song: dict[str, Any]) -> str:
+    meter = str(song.get("time_signature", "4/4"))
+    groove_ko = GROOVE_LABELS_KO.get(normalize_groove_style(song.get("groove_style")) or "", "")
+    return f"{meter} · {groove_ko}" if groove_ko else meter
+
+
 def format_song_form_visual(
     song_form: str,
     transition_mode: str | None = None,
@@ -206,12 +214,29 @@ def format_song_form_visual(
     """Format a song form into a clear visual progression string with directional arrows."""
     has_pad = _has_synth_pad(session_instruments)
     pad_tag = "[패드 홀드]" if has_pad else "[잔잔한 코드 유지]"
+    reset_tag = "[정박 엔딩 · 카운트 재진입]"
     text = (song_form or "I(4m) - V1 - C - O").strip()
-    text = re.sub(r"\s*-->\s*\(Medley[^)]*\)", "  ⇒  [바로 연결]", text, flags=re.IGNORECASE)
+    if transition_mode == "rhythm_reset":
+        text = re.sub(r"\s*-->\s*\(Medley[^)]*\)", f"  ⇒  {reset_tag}", text, flags=re.IGNORECASE)
+    else:
+        text = re.sub(r"\s*-->\s*\(Medley[^)]*\)", "  ⇒  [바로 연결]", text, flags=re.IGNORECASE)
     text = re.sub(r"\s*-->\s*\(Pad[^)]*\)", f"  ⇒  {pad_tag}", text, flags=re.IGNORECASE)
     text = re.sub(r"\s+-\s+", "  →  ", text)
-    if transition_mode == "pad_break" and "[패드" not in text and "[잔잔한 코드 유지]" not in text and "[바로 연결]" not in text:
+    if (
+        transition_mode == "pad_break"
+        and "[패드" not in text
+        and "[잔잔한 코드 유지]" not in text
+        and "[바로 연결]" not in text
+        and "[정박 엔딩" not in text
+    ):
         text = f"{text}  ⇒  {pad_tag}"
+    elif (
+        transition_mode == "rhythm_reset"
+        and "[정박 엔딩" not in text
+        and "[패드" not in text
+        and "[잔잔한 코드 유지]" not in text
+    ):
+        text = f"{text}  ⇒  {reset_tag}"
     return text
 
 
@@ -240,7 +265,11 @@ def _format_transition_line(
     return base
 
 
-def song_form_to_korean_slides(song_form: str, next_song_title: str | None = None) -> str:
+def song_form_to_korean_slides(
+    song_form: str,
+    next_song_title: str | None = None,
+    transition_mode: str | None = None,
+) -> str:
     """Convert musical song-form notation into plain Korean PPT slide progression."""
     if not song_form:
         return "1절 -> 후렴"
@@ -263,7 +292,10 @@ def song_form_to_korean_slides(song_form: str, next_song_title: str | None = Non
     for tok in tokens:
         if tok == "MEDLEY_NEXT":
             target_label = f" ({next_song_title})" if next_song_title else ""
-            korean_steps.append(f"★ 무공백 바로 다음 곡 진입{target_label}")
+            if transition_mode == "rhythm_reset":
+                korean_steps.append(f"★ 정박 엔딩 후 카운트에 다음 곡 진입{target_label}")
+            else:
+                korean_steps.append(f"★ 무공백 바로 다음 곡 진입{target_label}")
             continue
 
         repeat_label = ""
@@ -403,7 +435,8 @@ def render_stamped_sheet_page(
         # Zone 1: Small compact metadata bar at the very top
         team_part = f" ({team})" if team else ""
         capo_part = f" · {capo_note}" if show_capo else ""
-        meta_line = f"[{slot_idx:02d}] {title}{team_part}   ·   {target_key} Key{capo_part}   ·   {bpm} BPM ({meter})"
+        meter_disp = _format_meter_with_groove(song)
+        meta_line = f"[{slot_idx:02d}] {title}{team_part}   ·   {target_key} Key{capo_part}   ·   {bpm} BPM ({meter_disp})"
 
         meter_pill_w = (_text_width(draw, f"[주의] {meter_note}", font_meter_warn) + 22) if meter_note else 0
         meta_max_w = CONTENT_W - (meter_pill_w + 16 if meter_note else 0)
@@ -526,7 +559,8 @@ def render_stamped_sheet_page(
         tr_mode = transition.get("transition_mode") if transition else None
         compact_form = format_song_form_visual(song_form, tr_mode, session_instruments=session_instruments)
         page_suffix = f"   [{pdf_page_label}]" if pdf_page_label else ""
-        compact_text = f"[{slot_idx:02d}] {title} ({page_num}/{total_pages})  ·  {target_key} Key  ·  {bpm} BPM ({meter})  |  곡 진행: {compact_form}{page_suffix}"
+        meter_disp = _format_meter_with_groove(song)
+        compact_text = f"[{slot_idx:02d}] {title} ({page_num}/{total_pages})  ·  {target_key} Key  ·  {bpm} BPM ({meter_disp})  |  곡 진행: {compact_form}{page_suffix}"
         c_lines = _wrap_text(draw, compact_text, font_compact, CONTENT_W - 32)
         box_h = 20 + len(c_lines) * 32
         draw.rounded_rectangle(
@@ -642,7 +676,8 @@ def render_cover_cuesheet_page(
 
         capo_part = f" ({capo_label})" if show_capo else ""
         meter_note = f"  [주의: {song['meter_note']}]" if song.get("meter_note") else ""
-        r1 = f"{slot_idx}. {song['title_ko']} ({song['worship_team']})   ·   {song['target_key']} Key{capo_part}   ·   {song['bpm']} BPM ({song.get('time_signature', '4/4')}){mismatch_note}{meter_note}"
+        meter_disp = _format_meter_with_groove(song)
+        r1 = f"{slot_idx}. {song['title_ko']} ({song['worship_team']})   ·   {song['target_key']} Key{capo_part}   ·   {song['bpm']} BPM ({meter_disp}){mismatch_note}{meter_note}"
 
         tr = tr_by_slot.get(slot_idx)
         tr_mode = tr["transition_mode"] if tr else None
@@ -768,7 +803,7 @@ def build_kakao_notice(
         shift = int(song.get("key_shift", 0))
         capo_label = (song.get("capo_info") or {}).get("label", "No Capo")
         capo_part = f" [{capo_label}]" if show_capo else ""
-        meter = song.get("time_signature", "4/4")
+        meter = _format_meter_with_groove(song)
         est_part = f" (~{float(song['estimated_minutes']):g}분)" if song.get("estimated_minutes") else ""
         meter_part = f" | ⚠ {song['meter_note']}" if song.get("meter_note") else ""
         smeta = matched_by_slot.get(idx, {})
@@ -839,7 +874,7 @@ def build_leader_cuesheet_md(
 
     for song in songs:
         idx = int(song["slot_index"])
-        meter_str = song.get("time_signature", "4/4")
+        meter_str = _format_meter_with_groove(song)
         if song.get("meter_note"):
             meter_str += f" — ⚠ {song['meter_note']}"
         lines.append(f"### {idx}. {song['title_ko']} (`{song['target_key']} Key`, {song['bpm']} BPM, {meter_str})")
@@ -920,9 +955,11 @@ def build_broadcast_cue(setlist_plan: dict[str, Any]) -> str:
         incipit = song.get("first_line_incipit") or "(첫 구절 미등록)"
         chorus_hint = f' / 후렴 시작: "{song["chorus_incipit"]}"' if song.get("chorus_incipit") else ""
         meter_hint = f"  [주의: {song['meter_note']}]" if song.get("meter_note") else ""
-        kr_flow = song_form_to_korean_slides(song.get("song_form", ""), next_song_title=next_title)
+        kr_flow = song_form_to_korean_slides(song.get("song_form", ""), next_song_title=next_title, transition_mode=tr_mode)
         if tr_mode == "pad_break" or (i == len(songs) - 1 and song.get("ending_type") == "pad_hold"):
             kr_flow += " -> ★ 자막 내림(기도/멘트 대기)"
+        elif tr_mode == "rhythm_reset" and "정박 엔딩" not in kr_flow:
+            kr_flow += " -> ★ 정박 엔딩 후 카운트에 다음 곡 첫 자막 대기"
         lines.append(f'{idx}. {song["title_ko"]} [첫 줄 확인: "{incipit}"{chorus_hint}]{meter_hint}')
         lines.append(f"   진행 순서: {kr_flow}")
         op_note = _sanitize_broadcast_note(str(song.get("ensemble_note") or ""))

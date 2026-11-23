@@ -1076,6 +1076,10 @@ def build_catalog(
             """
         )
 
+        # Preserve curated pinpoint rhythm/groove & BPM fixes across full rebuilds
+        from curate_rhythm_metadata import apply_curated_rhythm_updates
+        apply_curated_rhythm_updates(conn)
+
         # Single fast bulk rebuild of trigram FTS5 index
         sync_songs_fts(conn, song_id=None)
 

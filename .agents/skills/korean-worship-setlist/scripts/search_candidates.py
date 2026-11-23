@@ -12,12 +12,14 @@ from typing import Any
 import numpy as np
 
 from common import (
+    GROOVE_SUBDIVISION_FAMILY,
     LOCAL_DB_PATH,
     WORSHIP_DB_PATH,
     clamp_to_vocal_range,
     configure_utf8_stdio,
     connect_dbs,
     load_user_config,
+    normalize_groove_style,
     normalize_scripture_ref,
     normalize_title,
     parse_key_signature,
@@ -346,7 +348,26 @@ def search_setlist_candidates(
           AND COALESCE(r.familiarity, 'unknown') != 'excluded'
         """
     ).fetchall()
+
+    sheet_cache_rows = conn.execute(
+        """
+        SELECT song_slug, detected_time_signature, detected_bpm, detected_groove
+        FROM local_db.sheet_cache
+        WHERE detected_time_signature IS NOT NULL
+           OR detected_bpm IS NOT NULL
+           OR detected_groove IS NOT NULL
+        ORDER BY id ASC
+        """
+    ).fetchall()
     conn.close()
+
+    verified_sheet_meta: dict[str, dict[str, Any]] = {}
+    for sc_row in sheet_cache_rows:
+        verified_sheet_meta[sc_row["song_slug"]] = {
+            "time_signature": sc_row["detected_time_signature"],
+            "bpm": sc_row["detected_bpm"],
+            "groove_style": normalize_groove_style(sc_row["detected_groove"]),
+        }
 
     max_monthly_new = int(preset.get("max_monthly_new_songs", 4))
     new_song_cap_reached = (service_type == "sunday_main") and (monthly_new_count >= max_monthly_new)
@@ -355,6 +376,19 @@ def search_setlist_candidates(
     arrangements_by_song: dict[int, list[dict[str, Any]]] = {}
     for r in rows:
         item = dict(r)
+        vmeta = verified_sheet_meta.get(item["song_slug"])
+        if vmeta:
+            if vmeta.get("groove_style"):
+                item["groove_style"] = vmeta["groove_style"]
+            if vmeta.get("bpm") is not None:
+                v_bpm = int(vmeta["bpm"])
+                item["bpm"] = v_bpm
+                item["tempo_tier"] = "fast" if v_bpm >= 100 else ("medium" if v_bpm >= 80 else "ballad")
+            if vmeta.get("time_signature"):
+                item["time_signature"] = vmeta["time_signature"]
+            item["bpm_source"] = "local_sheet_verified"
+            item["confidence"] = max(float(item.get("confidence") or 0.5), 0.92)
+        item["groove_style"] = normalize_groove_style(item.get("groove_style"))
         arrangements_by_song.setdefault(item["id"], []).append(item)
 
     chosen_arrs: list[dict[str, Any]] = []
@@ -537,6 +571,8 @@ def search_setlist_candidates(
             "time_signature": cand["time_signature"],
             "bpm": cand["bpm"],
             "tempo_tier": cand["tempo_tier"],
+            "groove_style": normalize_groove_style(cand.get("groove_style")),
+            "bpm_source": cand.get("bpm_source", "manual_seed"),
             "intro_first_chord": cand["intro_first_chord"],
             "outro_last_chord": cand["outro_last_chord"],
             "ending_type": cand["ending_type"],
@@ -593,6 +629,22 @@ def search_setlist_candidates(
             for item in scored_pool:
                 if era_counts.get(item["era"], 0) == min_era_cnt:
                     item["score"] = round(item["score"] + 0.25, 4)
+
+        # Prefer rhythmically compatible groove when chaining fast songs
+        if pre_sermon_results and "fast" in slot.get("tempo_tiers", []):
+            prev_primary = pre_sermon_results[-1]["primary"]
+            prev_gr = normalize_groove_style(prev_primary.get("groove_style"))
+            prev_fam = GROOVE_SUBDIVISION_FAMILY.get(prev_gr or "", "neutral")
+            if prev_primary.get("tempo_tier") == "fast" and prev_fam != "neutral":
+                for item in scored_pool:
+                    cur_gr = normalize_groove_style(item.get("groove_style"))
+                    cur_fam = GROOVE_SUBDIVISION_FAMILY.get(cur_gr or "", "neutral")
+                    if cur_fam == "neutral":
+                        continue
+                    if cur_fam == prev_fam:
+                        item["score"] = round(item["score"] + 0.08, 4)
+                    else:
+                        item["score"] = round(item["score"] - 0.08, 4)
 
         scored_pool.sort(key=lambda x: -x["score"])
         if not scored_pool:

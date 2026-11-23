@@ -615,5 +615,232 @@ def test_global_plugin_and_global_skill_workspace_isolation(tmp_path: Path, monk
     assert common.get_local_db_path() == active_ws.resolve() / ".worship-setlist" / "church_local.db"
 
 
+def test_rhythm_groove_transitions_and_vision_self_healing(
+    seeded_env: tuple[Path, Path, Path],
+    tmp_path: Path,
+) -> None:
+    import sqlite3
+    import find_sheets
+    import plan_transitions
+    import search_candidates
+    import stamp_sheets
+
+    worship_db, local_db, _ = seeded_env
+
+    # 1. Incompatible subdivisions at identical 124 BPM force rhythm_reset (never seamless segue)
+    tr_clash = plan_transitions.evaluate_transition(
+        {
+            "slot_index": 1,
+            "title_ko": "우리 모두 찬양하세",
+            "time_signature": "4/4",
+            "bpm": 124,
+            "tempo_tier": "fast",
+            "groove_style": "shuffle_bounce",
+            "outro_last_chord": "G",
+        },
+        {
+            "slot_index": 2,
+            "title_ko": "기쁨으로 찬양",
+            "time_signature": "4/4",
+            "bpm": 124,
+            "tempo_tier": "fast",
+            "groove_style": "16th_upbeat",
+            "intro_first_chord": "G",
+        },
+        "G",
+        "G",
+        session_instruments=["piano", "drums"],
+    )
+    assert tr_clash["transition_mode"] == "rhythm_reset"
+    assert "리듬 리셋 전환" in tr_clash["session_cue"]
+    assert "4박 카운트" in tr_clash["session_cue"]
+
+    hero_reset = stamp_sheets.format_song_form_visual(
+        "I(4m) - V1 - C(x2) -->(Medley 2번곡)",
+        transition_mode="rhythm_reset",
+    )
+    assert "[정박 엔딩 · 카운트 재진입]" in hero_reset
+    assert "[바로 연결]" not in hero_reset
+
+    # 2. Unverified catalog_estimated fast songs emit rhythmic safety warning
+    tr_unverified = plan_transitions.evaluate_transition(
+        {
+            "slot_index": 1,
+            "title_ko": "미검증빠른곡A",
+            "time_signature": "4/4",
+            "bpm": 124,
+            "tempo_tier": "fast",
+            "bpm_source": "catalog_estimated",
+            "groove_style": None,
+            "outro_last_chord": "G",
+        },
+        {
+            "slot_index": 2,
+            "title_ko": "미검증빠른곡B",
+            "time_signature": "4/4",
+            "bpm": 124,
+            "tempo_tier": "fast",
+            "bpm_source": "catalog_estimated",
+            "groove_style": None,
+            "intro_first_chord": "G",
+        },
+        "G",
+        "G",
+    )
+    assert tr_unverified["rhythm_unverified"] is True
+    assert "리듬 미검증(DB 추정치)" in tr_unverified["session_cue"]
+
+    # 3. Older sheet_cache auto-migration + vision rhythm recalculation on same-Key + self-healing search
+    legacy_local_db = tmp_path / "legacy_local.db"
+    lconn = sqlite3.connect(str(legacy_local_db))
+    lconn.executescript(
+        """
+        CREATE TABLE repertoire (
+            song_slug TEXT PRIMARY KEY,
+            familiarity TEXT NOT NULL DEFAULT 'unknown',
+            preferred_key TEXT,
+            times_sung INTEGER NOT NULL DEFAULT 0,
+            consecutive_learning_count INTEGER NOT NULL DEFAULT 0,
+            last_sung_date TEXT,
+            team_memo TEXT
+        );
+        CREATE TABLE setlist_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            service_date TEXT NOT NULL,
+            service_type TEXT NOT NULL,
+            cooldown_scope TEXT NOT NULL,
+            service_part TEXT DEFAULT '1부',
+            preacher TEXT,
+            sermon_title TEXT,
+            sermon_scripture TEXT,
+            church_season TEXT DEFAULT 'ordinary',
+            theme_input TEXT NOT NULL,
+            setlist_json TEXT NOT NULL,
+            output_dir TEXT,
+            created_at TEXT DEFAULT (datetime('now'))
+        );
+        CREATE TABLE sheet_cache (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            song_slug TEXT NOT NULL,
+            file_path TEXT NOT NULL,
+            detected_key TEXT NOT NULL,
+            page_count INTEGER NOT NULL DEFAULT 1,
+            verified_sections_json TEXT DEFAULT '[]',
+            verified_at TEXT DEFAULT (datetime('now'))
+        );
+        """
+    )
+    lconn.commit()
+    lconn.close()
+
+    wconn = sqlite3.connect(str(worship_db))
+    wconn.row_factory = sqlite3.Row
+    fast_row = wconn.execute(
+        """
+        SELECT s.song_slug, s.title_ko, a.key_signature
+        FROM songs s JOIN arrangements a ON a.song_id = s.id
+        WHERE a.tempo_tier = 'fast'
+        LIMIT 1
+        """
+    ).fetchone()
+    wconn.close()
+    assert fast_row is not None
+    slug_1 = fast_row["song_slug"]
+    title_1 = fast_row["title_ko"]
+
+    dummy_sheet = tmp_path / f"{title_1}_G.png"
+    dummy_sheet.write_bytes(b"PNG_PLACEHOLDER")
+
+    matched = {
+        "sheets": [
+            {
+                "slot_index": 1,
+                "song_slug": slug_1,
+                "title_ko": title_1,
+                "target_key": "G",
+                "sheet_key": "G",
+                "source_file": str(dummy_sheet),
+                "page_count": 1,
+            }
+        ]
+    }
+    plan = {
+        "session_skill_tier": "intermediate",
+        "session_instruments": ["piano", "drums"],
+        "songs": [
+            {
+                "slot_index": 1,
+                "song_slug": slug_1,
+                "title_ko": title_1,
+                "original_key": "G",
+                "target_key": "G",
+                "key_shift": 0,
+                "bpm": 124,
+                "time_signature": "4/4",
+                "tempo_tier": "fast",
+                "groove_style": "straight_8th",
+                "song_form": "I(4m) - V1 - C(x2) -->(Medley 2번곡)",
+                "outro_last_chord": "G",
+            },
+            {
+                "slot_index": 2,
+                "song_slug": "slot2-straight-16th",
+                "title_ko": "다음빠른곡",
+                "original_key": "G",
+                "target_key": "G",
+                "key_shift": 0,
+                "bpm": 124,
+                "time_signature": "4/4",
+                "tempo_tier": "fast",
+                "groove_style": "16th_upbeat",
+                "song_form": "V1 - C(x2) - O",
+                "intro_first_chord": "G",
+            },
+        ],
+        "transitions": [],
+    }
+    verifications = [
+        {
+            "slot_index": 1,
+            "verified_key": "G",
+            "verified_groove": "shuffle",
+            "verified_bpm": 126,
+            "verified_time_signature": "4/4",
+            "verified_sections": ["I", "V1", "C"],
+            "key_mismatch_action": "ok",
+            "lyrics_theology_ok": True,
+        }
+    ]
+    _, updated_plan = find_sheets.apply_vision_verification(
+        matched,
+        verifications,
+        setlist_plan=plan,
+        worship_db_path=worship_db,
+        local_db_path=legacy_local_db,
+    )
+    assert updated_plan is not None
+    assert updated_plan["songs"][0]["groove_style"] == "shuffle_bounce"
+    assert updated_plan["songs"][0]["bpm"] == 126
+    assert updated_plan["transitions"][0]["transition_mode"] == "rhythm_reset"
+    assert "-->" not in updated_plan["songs"][0]["song_form"]
+
+    # Self-healing: subsequent search_setlist_candidates picks up cached groove & BPM from legacy_local_db
+    cand_res = search_candidates.search_setlist_candidates(
+        service_type="youth",
+        theme=title_1,
+        custom_tempos=["fast"],
+        user_config={"session_instruments": ["piano", "drums"], "local_sheet_dirs": []},
+        worship_db_path=worship_db,
+        local_db_path=legacy_local_db,
+    )
+    all_slot1 = [cand_res["pre_sermon"][0]["primary"]] + cand_res["pre_sermon"][0]["plan_b"]
+    healed = next((c for c in all_slot1 if c["song_slug"] == slug_1), None)
+    assert healed is not None
+    assert healed["groove_style"] == "shuffle_bounce"
+    assert healed["bpm"] == 126
+    assert healed["bpm_source"] == "local_sheet_verified"
+
+
+
 
 
