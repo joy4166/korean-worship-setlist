@@ -1,8 +1,13 @@
 # 한국 찬양 콘티 에이전트 Skill (`korean-worship-setlist`)
 
-한국 교회의 예배 유형과 교회력 절기, 설교 주제·본문, 찬양팀 음역대와 세션 편성에 맞춰 **찬양 콘티 기획 → Key·박자·카포·전조 최적화 → 로컬 악보 매칭 및 비전 검수 → 상단 송폼(`I - V - PC - C...`) 스탬핑 및 4종 산출물 생성**을 자동화하는 100% 로컬 구동 Antigravity Skill입니다.
+[![npm version](https://img.shields.io/npm/v/korean-worship-setlist.svg)](https://www.npmjs.com/package/korean-worship-setlist)
+[![License: MIT AND OFL-1.1](https://img.shields.io/badge/license-MIT%20AND%20OFL--1.1-blue.svg)](./LICENSE)
+[![Python 3.11 | 3.12](https://img.shields.io/badge/python-3.11%20%7C%203.12-3776AB.svg)](./.agents/skills/korean-worship-setlist/pyproject.toml)
 
-자세한 아키텍처와 스키마 설계는 [DESIGN.md](./DESIGN.md)를 참고하세요.
+한국 교회의 예배 유형과 교회력 절기, 설교 주제·본문, 찬양팀 음역대와 세션 편성에 맞춰 **찬양 콘티 기획 → Key·박자·카포·전조 최적화 → 로컬 악보 매칭 및 비전 검수 → 상단 송폼(`I - V - PC - C...`) 스탬핑 및 4종 산출물 생성**을 자동화하는 100% 로컬 구동 AI 에이전트 Skill입니다.
+
+- **npm 패키지**: [https://www.npmjs.com/package/korean-worship-setlist](https://www.npmjs.com/package/korean-worship-setlist) (`korean-worship-setlist`)
+- **아키텍처 설계 문서**: [DESIGN.md](./DESIGN.md)
 
 ---
 
@@ -19,64 +24,104 @@
 ## 디렉터리 구조
 
 ```text
-.agents/skills/korean-worship-setlist/
-├── pyproject.toml                  # runtime / builder / embeddings / dev 의존성 분리
-├── SKILL.md                        # 에이전트용 6단계 실행 런북
-├── scripts/
-│   ├── common.py                   # DB 연결(ATTACH), 조성/음역 수학, 성경 코드 정규화, 이단 게이트
-│   ├── init_db.py                  # worship.db & church_local.db 초기화 및 시드 적재
-│   ├── init_profile.py             # `/korean-worship-setlist init` 팀·세션·음역 온보딩
-│   ├── build_bulk_catalog.py       # 4대 공개 소스 통합(시드+새찬송가645+KCCM+워십디스코그래피) 대량 DB 구축
-│   ├── collect_youtube.py          # 워십팀 유튜브 flat 차분 수집 및 챕터 분할 파서
-│   ├── analyze_audio.py            # 3구간 오디오 BPM(6/8·하프타임 보정) 및 Key 추정
-│   ├── enrich_metadata.py          # 메타 정규화, trigram FTS5 동기화, E5 passage 임베딩
-│   ├── manage_history.py           # bootstrap 초기 시딩, 1~3부 중복 방지 이력/레퍼토리 관리
-│   ├── search_candidates.py        # 하이브리드 선곡, 자동 이조, 절기/쿨타임/정착/친숙도 밸런스
-│   ├── plan_transitions.py         # Key·박자·카포·전조 브릿지 코드 최적화
-│   ├── find_sheets.py              # 로컬 악보 매칭(원본 Key 폴백), pypdfium2 래스터화, 비전 검수 기록
-│   ├── fetch_sheets.py             # 공개 악보 URL 안전 수집(SSRF·차단·해상도 검증)
-│   └── stamp_sheets.py             # A4 배너 스탬핑, 1p 커버·북마크 통합 PDF, 4종 산출물, 부분 Diff 갱신
-├── references/                     # init 온보딩, 예배 프리셋, 전조 공식, 송폼/비전 검수 가이드
-├── resources/fonts/                # 내장 OFL 한글 고딕 폰트 (NotoSansKR-VF.ttf)
-├── data/                           # seed_songs.json, worship.db, blocked_sources.json, user_config.example.json
-└── tests/                          # Phase 1~5 단위 및 End-to-End 테스트 스위트
+.
+├── package.json                        # npm 패키지 명세 (`korean-worship-setlist`)
+├── plugin.json                         # Antigravity 플러그인 매니페스트 (`--plugin` 설치용)
+├── bin/
+│   └── korean-worship-setlist.mjs      # 무의존 Node ESM CLI 인스톨러 (`npx korean-worship-setlist`)
+├── LICENSE                             # 루트 MIT 라이선스 및 서드파티·카탈로그 저작권 고지
+├── DESIGN.md                           # 전체 아키텍처·DB 스키마 설계 문서
+└── .agents/skills/korean-worship-setlist/
+    ├── LICENSE                         # 스킬 단독 배포용 라이선스 (MIT + SIL OFL-1.1 + 저작권 고지)
+    ├── pyproject.toml                  # runtime / builder / embeddings / dev 의존성 분리
+    ├── uv.lock                         # Python 의존성 잠금 파일
+    ├── SKILL.md                        # 에이전트용 6단계 실행 런북
+    ├── scripts/
+    │   ├── common.py                   # DB 연결(ATTACH), 로컬/전역 상태 경로 격리, 조성/음역 수학, 이단 게이트
+    │   ├── init_db.py                  # worship.db & church_local.db 초기화 및 시드 적재
+    │   ├── init_profile.py             # `/korean-worship-setlist init` 팀·세션·음역 온보딩
+    │   ├── build_bulk_catalog.py       # 4대 공개 소스 통합(시드+새찬송가645+KCCM+워십디스코그래피) 대량 DB 구축
+    │   ├── collect_youtube.py          # 워십팀 유튜브 flat 차분 수집 및 챕터 분할 파서
+    │   ├── analyze_audio.py            # 3구간 오디오 BPM(6/8·하프타임 보정) 및 Key 추정
+    │   ├── enrich_metadata.py          # 메타 정규화, trigram FTS5 동기화, E5 passage 임베딩
+    │   ├── manage_history.py           # bootstrap 초기 시딩, 1~3부 중복 방지 이력/레퍼토리 관리
+    │   ├── search_candidates.py        # 하이브리드 선곡, 자동 이조, 절기/쿨타임/정착/친숙도 밸런스
+    │   ├── plan_transitions.py         # Key·박자·카포·전조 브릿지 코드 최적화
+    │   ├── find_sheets.py              # 로컬 악보 매칭(원본 Key 폴백), pypdfium2 래스터화, 비전 검수 기록
+    │   ├── fetch_sheets.py             # 공개 악보 URL 안전 수집(SSRF·차단·해상도 검증)
+    │   └── stamp_sheets.py             # A4 배너 스탬핑, 1p 커버·북마크 통합 PDF, 4종 산출물, 부분 Diff 갱신
+    ├── references/                     # init 온보딩, 예배 프리셋, 전조 공식, 송폼/비전 검수 가이드
+    ├── resources/fonts/                # 내장 OFL 한글 고딕 폰트 (`NotoSansKR-VF.ttf`, `OFL.txt`)
+    ├── data/                           # seed_songs.json, worship.db, blocked_sources.json, user_config.example.json
+    └── tests/                          # Phase 1~5 단위 및 End-to-End 테스트 스위트
 ```
 
 ---
 
-## 빠른 시작
+## 설치 및 빠른 시작
 
-### 0. npm (`npx`)으로 스킬 설치
+### 1. npm (`npx`)으로 설치 (권장)
+
+[korean-worship-setlist](https://www.npmjs.com/package/korean-worship-setlist) npm 패키지의 zero-dependency CLI로 사용 중인 AI 에이전트 환경에 맞게 바로 설치할 수 있습니다. *(요구 사항: Node.js 18+, Python 패키지 관리용 `uv`)*
+
 ```powershell
-# 현재 워크스페이스에 설치 (.agents/skills/korean-worship-setlist)
+# 현재 워크스페이스에 스킬 설치 (.agents/skills/korean-worship-setlist)
 npx korean-worship-setlist install
 
-# 전역 스킬로 설치 (~/.gemini/config/skills/korean-worship-setlist)
+# 스킬 설치 + Python 의존성(`uv sync`) 한 번에 완료
+npx korean-worship-setlist install --sync
+
+# Antigravity 전역 스킬로 설치 (~/.gemini/config/skills/korean-worship-setlist)
 npx korean-worship-setlist install --global
 
 # Antigravity 전역 플러그인으로 설치 (~/.gemini/config/plugins/korean-worship-setlist)
 npx korean-worship-setlist install --plugin
 
-# Claude Code 워크스페이스 스킬로 설치 (.claude/skills/korean-worship-setlist)
+# Claude Code 워크스페이스 / 전역 스킬로 설치 (.claude/skills/... 또는 ~/.claude/skills/...)
 npx korean-worship-setlist install --claude
+npx korean-worship-setlist install --claude --global
+
+# 공용 ~/.agents/skills/ 전역 설치 및 사용자 지정 경로(`--dest`) 설치
+npx korean-worship-setlist install --agents --global
+npx korean-worship-setlist install --dest ./custom-path
 ```
 
-### 1. 환경 설치 (`uv`)
-```powershell
-$SKILL_DIR = ".agents/skills/korean-worship-setlist"  # 전역 설치 시 해당 스킬/플러그인 경로 지정
-uv sync --project "$SKILL_DIR" --extra dev
-```
-*(데이터 수집·오디오 분석 기능을 쓸 경우 `--extra builder`, 로컬 임베딩 모델을 쓸 경우 `--extra embeddings`를 추가합니다.)*
+- **업그레이드 안전성**: 기존 설치 경로에 다시 `npx korean-worship-setlist install`을 실행해도 교회별 `user_config.json` 및 `church_local.db`는 덮어쓰지 않고 보존합니다.
+- **전역 스킬·플러그인 상태 격리**: `--global`·`--plugin`·`--agents --global` 등으로 전역 설치한 뒤 워크스페이스 루트(`cwd`)에서 실행하면, 공용 카탈로그(`$SKILL_DIR/data/worship.db`)는 읽기 전용으로 공유하고 교회별 상태(`user_config.json`, `church_local.db`, `_raster_cache`)는 현재 워크스페이스의 `<workspace>/.worship-setlist/`에 자동 분리 저장됩니다.
 
-### 2. DB 초기화 및 시드 적재
+### 2. Python 런타임 환경 설치 (`uv`)
+
+`--sync` 옵션을 쓰지 않고 설치했다면 설치된 스킬 경로(`$SKILL_DIR`)에 대해 아래 명령을 1회 실행합니다.
+
 ```powershell
+$SKILL_DIR = ".agents/skills/korean-worship-setlist"  # 전역·Claude 설치 시 해당 스킬 경로 지정
+uv sync --project "$SKILL_DIR"
+```
+
+- **선택 의존성**: 테스트 실행 시 `--extra dev`, 데이터 수집·오디오 분석 시 `--extra builder`, 로컬 E5 임베딩 모델 사용 시 `--extra embeddings`를 추가합니다.
+- **Windows App Control (`os error 4551`) 대응**: 보안 정책이 `.venv\Scripts\python.exe` 직접 실행을 차단하는 환경에서는 PowerShell에서 `$env:PYTHONPATH = "$SKILL_DIR/scripts;$SKILL_DIR/.venv/Lib/site-packages"`를 지정한 뒤 `& (uv python find ">=3.11,<3.13") "$SKILL_DIR/scripts/<script>.py"`로 실행할 수 있습니다.
+
+### 3. 에이전트에서 바로 사용하기
+
+npm 패키지 및 GitHub 저장소에 **공용 곡 DB(`data/worship.db`: 3,538곡 / 5,470편곡)가 이미 포함되어 있으므로** 사용자가 별도로 DB를 재구축할 필요 없이 바로 콘티 작업을 시작할 수 있습니다.
+
+| 명령 / 요청 예시 | 동작 요약 |
+|---|---|
+| `/korean-worship-setlist init` (또는 *"찬양팀 초기 설정해줘"*) | 교회 규모·회중 연령대·세션 악기·보컬 음역대·로컬 악보 폴더(`sheet/`) 인터뷰 후 `user_config.json` 저장 |
+| *"이번 주 청년부 예배 시편 23편 주제로 찬양 콘티 짜줘"* (`plan`) | 후보 선곡 → Key·박자·전조 브릿지 설계 → 초안 컨펌 → 악보 비전 검수 → 통합 PDF·PNG·카톡·방송실 큐시트 생성 |
+| *"콘티 2번 곡 Key를 A로 바꾸고 수정해줘"* (`update <슬롯>`) | 해당 슬롯과 직전 곡(`k-1`) 전환 배너·`kakao_diff_notice.txt`·`broadcast_cue.txt` 부분 갱신 |
+| *"지난 주 확정 콘티 이력 조회/등록해줘"* (`history`) | `manage_history.py`로 1~3부 예배 이력, 6주 쿨타임, 신곡 정착 상태(`learning`), 곡별 `pinned_key` 관리 |
+
+### 4. 개발자용: DB 재초기화 및 테스트 실행
+
+기여자·개발자가 시드 데이터에서 DB를 재생성하거나 테스트 스위트를 검증할 때 사용합니다.
+
+```powershell
+# 시드 기반 DB 초기화
 uv run --project "$SKILL_DIR" python "$SKILL_DIR/scripts/init_db.py" --seed
-```
-- **전역 스킬·플러그인 설치 시 상태 격리**: `~/.gemini/config/`, `~/.agents/`, `~/.claude/`, `node_modules/` 아래에 전역 설치된 상태에서 워크스페이스 루트(`cwd`)에서 실행하면, 공용 카탈로그(`$SKILL_DIR/data/worship.db`)는 읽기 전용으로 공유하고 교회별 설정·이력(`user_config.json`, `church_local.db`, `_raster_cache`)은 현재 워크스페이스 `<workspace>/.worship-setlist/`에 자동 분리 저장됩니다.
-- *(Windows 애플리케이션 제어 정책이 `.venv\Scripts\python.exe`를 차단하는 환경에서는 PowerShell에서 `$env:PYTHONPATH = "$SKILL_DIR/scripts;$SKILL_DIR/.venv/Lib/site-packages"` 설정 후 `& (uv python find ">=3.11,<3.13") "$SKILL_DIR/scripts/init_db.py" --seed`로 실행하세요.)*
 
-### 3. 전체 테스트 실행
-```powershell
+# 개발 의존성 포함 동기화 및 전체 pytest 실행
+uv sync --project "$SKILL_DIR" --extra dev
 $env:PYTHONPATH = "$SKILL_DIR/scripts;$SKILL_DIR/.venv/Lib/site-packages"
 & (uv python find ">=3.11,<3.13") -m pytest "$SKILL_DIR/tests" -v
 ```
