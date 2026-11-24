@@ -1103,6 +1103,265 @@ def test_tempo_classification_semantics_and_catalog_mood_genre_accuracy() -> Non
         conn.close()
 
 
+def test_leader_ment_slots_antipattern_linter_and_cuesheet_styles(tmp_path: Path) -> None:
+    import find_sheets
+    import init_db
+    import init_profile
+    import plan_transitions
+    import stamp_sheets
+
+    cfg_path = tmp_path / "user_config.json"
+    worship_db = tmp_path / "worship.db"
+    local_db = tmp_path / "church_local.db"
+    init_db.initialize_databases(worship_db, local_db, seed_path=common.SEED_SONGS_PATH)
+
+    # 1. Profile persistence & validation for leader_ment_style
+    res = init_profile.apply_profile(
+        team_name="멘트테스트팀",
+        leader_ment_style="bullet_points",
+        config_path=cfg_path,
+        worship_db_path=worship_db,
+        local_db_path=local_db,
+    )
+    assert res["config"]["leader_ment_style"] == "bullet_points"
+
+    with pytest.raises(ValueError, match="leader_ment_style"):
+        init_profile.apply_profile(
+            leader_ment_style="dramatic_sermon",
+            config_path=cfg_path,
+            worship_db_path=worship_db,
+            local_db_path=local_db,
+        )
+
+    # 2. ment_slot generation for I(4m), I(8m), segue, rhythm_reset, ballad->Selah, padless
+    cand_data = {
+        "service_type": "youth",
+        "church_season": "ordinary",
+        "theme_input": "광야와 은혜",
+        "scripture_input": "PSA.23",
+        "reference_date": "2026-11-29",
+        "pre_sermon": [
+            {
+                "slot_index": 1,
+                "target_stage": "opener",
+                "primary": {
+                    "song_slug": "song-1",
+                    "title_ko": "주 이름 찬양",
+                    "target_key": "G",
+                    "original_key": "G",
+                    "bpm": 120,
+                    "time_signature": "4/4",
+                    "tempo_tier": "fast",
+                    "groove_style": "rock_upbeat",
+                    "song_form": "I(4m) - V1 - C(x2)",
+                    "theological_core": "주의 이름 높임",
+                    "outro_last_chord": "G",
+                    "ending_type": "clean_cut",
+                    "available_sections": ["I", "V1", "C"],
+                },
+            },
+            {
+                "slot_index": 2,
+                "target_stage": "declaration",
+                "primary": {
+                    "song_slug": "song-2",
+                    "title_ko": "나는 자유해",
+                    "target_key": "G",
+                    "original_key": "G",
+                    "bpm": 122,
+                    "time_signature": "4/4",
+                    "tempo_tier": "fast",
+                    "groove_style": "rock_upbeat",
+                    "song_form": "V1 - C(x2) - O",
+                    "theological_core": "복음의 자유 선포",
+                    "intro_first_chord": "G",
+                    "outro_last_chord": "G",
+                    "ending_type": "clean_cut",
+                    "available_sections": ["V1", "C", "O"],
+                },
+            },
+            {
+                "slot_index": 3,
+                "target_stage": "meditation",
+                "primary": {
+                    "song_slug": "song-3",
+                    "title_ko": "광야를 지나며",
+                    "target_key": "G",
+                    "original_key": "G",
+                    "bpm": 68,
+                    "time_signature": "4/4",
+                    "tempo_tier": "ballad",
+                    "groove_style": "16th_ballad",
+                    "song_form": "I(4m) - V1 - C - O",
+                    "theological_core": "광야 속 인도하심 신뢰",
+                    "scripture_refs": ["PSA.23:1-3"],
+                    "intro_first_chord": "G",
+                    "outro_last_chord": "G",
+                    "ending_type": "pad_hold",
+                    "available_sections": ["I", "V1", "C", "O"],
+                },
+            },
+            {
+                "slot_index": 4,
+                "target_stage": "confession",
+                "primary": {
+                    "song_slug": "song-4",
+                    "title_ko": "은혜",
+                    "target_key": "C",
+                    "original_key": "C",
+                    "bpm": 66,
+                    "time_signature": "6/8",
+                    "tempo_tier": "ballad",
+                    "groove_style": "6_8_worship",
+                    "song_form": "I(4m) - V1 - C - O",
+                    "theological_core": "모든 것이 은혜임 고백",
+                    "intro_first_chord": "C",
+                    "outro_last_chord": "C",
+                    "ending_type": "pad_hold",
+                    "available_sections": ["I", "V1", "C", "O"],
+                },
+            },
+        ],
+        "post_sermon": {
+            "reprise_candidate": {
+                "song_slug": "song-4",
+                "title_ko": "은혜",
+                "target_key": "C",
+                "song_form": "I(2m) - [C only](x2) - Vamp(결단기도)",
+            },
+            "prayer_chord_loops": ["IV - V - iii - vi"],
+        },
+    }
+
+    plan = plan_transitions.plan_setlist_transitions(
+        cand_data,
+        user_config={
+            "session_skill_tier": "intermediate",
+            "session_instruments": ["piano", "synth_pad", "drums"],
+            "leader_ment_style": "short_script",
+        },
+    )
+    assert plan["songs"][0]["ment_slot"]["role"] == "opening_call"
+    assert plan["songs"][0]["ment_slot"]["allowed"] is True
+    assert plan["songs"][0]["ment_slot"]["max_chars"] == 55
+    assert plan["songs"][1]["ment_slot"]["role"] == "skip_direct"
+    assert plan["songs"][1]["ment_slot"]["allowed"] is False
+    assert plan["songs"][1]["ment_slot"]["max_chars"] == 0
+    assert plan["songs"][2]["ment_slot"]["role"] == "pad_bridge"
+    assert plan["songs"][2]["ment_slot"]["suggested_scripture"] == "PSA.23:1-3"
+    assert plan["songs"][3]["ment_slot"]["role"] == "pad_bridge"
+    assert "침묵(Selah)" in plan["songs"][3]["ment_slot"]["timing_cue"]
+    assert plan["post_sermon"]["ment_slot"]["role"] == "reprise_prayer"
+
+    # Check I(8m) opening & piano-only (padless) cue & rhythm_reset skip_direct
+    plan_padless = json.loads(json.dumps(cand_data, ensure_ascii=False))
+    plan_padless["pre_sermon"][0]["primary"]["song_form"] = "I(8m) - V1 - C"
+    plan_padless["pre_sermon"][1]["primary"]["groove_style"] = "shuffle_bounce"
+    res_padless = plan_transitions.plan_setlist_transitions(
+        plan_padless,
+        user_config={
+            "session_skill_tier": "intermediate",
+            "session_instruments": ["piano", "drums"],
+            "leader_ment_style": "short_script",
+        },
+    )
+    assert res_padless["songs"][0]["ment_slot"]["max_chars"] == 75
+    assert res_padless["songs"][1]["ment_slot"]["role"] == "skip_direct"
+    assert "4박 카운트 직결" in res_padless["songs"][1]["ment_slot"]["timing_cue"]
+    assert "피아노 잔잔한 코드" in res_padless["songs"][3]["ment_slot"]["timing_cue"]
+
+    # 3. find_sheets vision recalc flips pad_break -> segue/rhythm_reset & clears stale leader_ment
+    dummy = tmp_path / "dummy.png"
+    dummy.write_bytes(b"PNG")
+    plan_flip = json.loads(json.dumps(plan, ensure_ascii=False))
+    # Force slot 3 temporarily to 120 BPM rock_upbeat via vision recalc so slot 2 -> 3 turns into pad_break or slot 1 -> 2 flips
+    # First attach leader_ment on slot 3, then have vision flip slot 3 to 122 BPM rock_upbeat (same key G, same tempo as slot 2) -> segue!
+    plan_flip["songs"][2]["leader_ment"] = {
+        "focus_point": "호흡 전환",
+        "spoken_text": "이제 조용히 주님의 인도하심을 구하며 나아갑시다.",
+    }
+    matched_flip = {
+        "sheets": [
+            {
+                "slot_index": 3,
+                "song_slug": "song-3",
+                "title_ko": "광야를 지나며",
+                "target_key": "G",
+                "sheet_key": "G",
+                "source_file": str(dummy),
+                "page_count": 1,
+            }
+        ]
+    }
+    _, updated_flip = find_sheets.apply_vision_verification(
+        matched_flip,
+        [
+            {
+                "slot_index": 3,
+                "verified_key": "G",
+                "verified_bpm": 122,
+                "verified_groove": "rock_upbeat",
+                "verified_time_signature": "4/4",
+                "lyrics_theology_ok": True,
+            }
+        ],
+        setlist_plan=plan_flip,
+        worship_db_path=worship_db,
+        local_db_path=local_db,
+    )
+    assert updated_flip is not None
+    assert updated_flip["transitions"][1]["transition_mode"] == "segue"
+    assert updated_flip["songs"][2]["ment_slot"]["role"] == "skip_direct"
+    assert "leader_ment" not in updated_flip["songs"][2]
+
+    # 4. Anti-Pattern Linter hard gates
+    bad_cases = [
+        ("사랑하는 성도 여러분 함께 찬양합시다.", {"role": "opening_call", "max_chars": 55, "max_sentences": 1}),
+        ("은혜의 귀한 시간이 되길 간절히 소망합니다.", {"role": "pad_bridge", "max_chars": 110, "max_sentences": 2}),
+        ("다음으로 부르실 찬양은 광야를 지나며입니다.", {"role": "pad_bridge", "max_chars": 110, "max_sentences": 2}),
+        ("목소리가 왜 이렇게 작으세요?", {"role": "opening_call", "max_chars": 55, "max_sentences": 1}),
+        ("할렐루야 아멘이십니까!", {"role": "opening_call", "max_chars": 55, "max_sentences": 1}),
+        ("짧은 멘트입니다.", {"role": "skip_direct", "allowed": False, "max_chars": 0, "max_sentences": 0}),
+        ("첫 문장입니다. 두 번째 문장입니다. 세 번째 문장이 넘쳤습니다.", {"role": "pad_bridge", "max_chars": 110, "max_sentences": 2}),
+        ("분주했던 우리의 일상을 지나며 주님 앞에 멈춰 서서 우리 마음을 다시 주님께 올려드리며 찬양하기 원합니다." + " 가" * 20, {"role": "opening_call", "max_chars": 55, "max_sentences": 1}),
+    ]
+    for bad_text, slot_spec in bad_cases:
+        with pytest.raises(ValueError):
+            stamp_sheets.validate_leader_ment(bad_text, slot_spec, song_title="광야를 지나며")
+
+    # 5. Render modes in build_leader_cuesheet_md ('short_script' vs 'bullet_points' vs 'none')
+    plan["songs"][0]["leader_ment"] = {
+        "focus_point": "예배 자리로의 시선 전환",
+        "spoken_text": "분주한 한 주를 내려놓고 주님만 바라보며 찬양합시다.",
+    }
+    plan["songs"][2]["leader_ment"] = {
+        "focus_point": "승리 선포에서 광야의 신뢰로 호흡 전환",
+        "spoken_text": "기쁨으로 주를 높였던 마음 그대로, 광야에서도 우리를 이끄시는 주님을 고백합시다.",
+        "scripture_callout": "시편 23:1-3",
+    }
+    plan["post_sermon"]["leader_ment"] = {
+        "focus_point": "설교 말씀 붙들고 결단 기도 전환",
+        "spoken_text": "들은 말씀 기억하며 함께 고백합시다. 삶의 자리를 주께 드리며 기도합시다.",
+    }
+
+    md_script = stamp_sheets.build_leader_cuesheet_md(plan, ment_style="short_script")
+    assert "인도 포인트" in md_script
+    assert "예시 멘트" in md_script
+    assert "[멘트 생략 — 음악으로 바로 연결]" in md_script
+    assert "시편 23:1-3" in md_script
+
+    md_bullet = stamp_sheets.build_leader_cuesheet_md(plan, ment_style="bullet_points")
+    assert "인도 포인트" in md_bullet
+    assert "예시 멘트" not in md_bullet
+    assert "[멘트 생략 — 음악으로 바로 연결]" in md_bullet
+
+    md_none = stamp_sheets.build_leader_cuesheet_md(plan, ment_style="none")
+    assert "인도 포인트" not in md_none
+    assert "예시 멘트" not in md_none
+    assert "[멘트 생략" not in md_none
+
+
+
 
 
 

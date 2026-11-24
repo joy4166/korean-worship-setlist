@@ -22,6 +22,7 @@
   "familiar_ratio": 0.75,
   "show_capo": false,
   "lock_past_keys": false,
+  "leader_ment_style": "short_script",
   "local_sheet_dirs": [
     "sheet"
   ],

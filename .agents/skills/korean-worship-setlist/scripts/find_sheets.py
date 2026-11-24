@@ -29,7 +29,7 @@ from common import (
     semitone_distance,
 )
 from manage_history import SHEET_EXTENSIONS, extract_title_and_key_from_label
-from plan_transitions import evaluate_transition, get_capo_info
+from plan_transitions import evaluate_transition, get_capo_info, populate_ment_slots
 
 
 def _scan_local_sheets(sheets_dirs: list[Path]) -> list[dict[str, Any]]:
@@ -413,6 +413,7 @@ def apply_vision_verification(
         or v.get("chorus_incipit")
         or v.get("ensemble_note")
         or v.get("caution_nuance")
+        or v.get("leader_ment") is not None
         for v in ver_by_slot.values()
     )
     updated_plan = setlist_plan
@@ -445,7 +446,7 @@ def apply_vision_verification(
                 if v.get("verified_time_signature"):
                     song["time_signature"] = str(v["verified_time_signature"]).strip()
                     song["bpm_source"] = "sheet_verified"
-                for field in ("meter_note", "chorus_incipit", "ensemble_note", "caution_nuance"):
+                for field in ("meter_note", "chorus_incipit", "ensemble_note", "caution_nuance", "leader_ment"):
                     if v.get(field) is not None:
                         song[field] = v[field]
 
@@ -490,6 +491,24 @@ def apply_vision_verification(
                         flags=re.IGNORECASE,
                     ).strip()
             updated_plan["transitions"] = new_transitions
+
+        inst_for_ment = updated_plan.get("session_instruments")
+        if inst_for_ment is None:
+            inst_for_ment = load_user_config().get("session_instruments")
+        ment_style = str(
+            updated_plan.get("leader_ment_style")
+            or load_user_config().get("leader_ment_style")
+            or "short_script"
+        )
+        updated_plan["leader_ment_style"] = ment_style
+        populate_ment_slots(
+            songs,
+            updated_plan.get("transitions", []),
+            updated_plan.get("post_sermon"),
+            service_type=updated_plan.get("service_type", "youth"),
+            session_instruments=inst_for_ment,
+            ment_style=ment_style,
+        )
 
     return matched_data, updated_plan
 

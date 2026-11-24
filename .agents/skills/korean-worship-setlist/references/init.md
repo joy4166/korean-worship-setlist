@@ -20,7 +20,7 @@ $env:PYTHONPATH = "$SKILL_DIR/scripts;$SKILL_DIR/.venv/Lib/site-packages"
 ```
 
 - **No `user_config.json` yet**: run the onboarding interview (Step 2) and write the profile.
-- **`user_config.json` already exists**: show the current summary (`church_scale`, `congregation_age_group`, `vocal_ensemble`, `session_instruments`, `session_skill_tier`, `leader_gender` / `vocal_floor`~`vocal_ceiling`, `show_capo`, `lock_past_keys`, `local_sheet_dirs`) and ask only which settings to change; preserve untouched fields.
+- **`user_config.json` already exists**: show the current summary (`church_scale`, `congregation_age_group`, `vocal_ensemble`, `session_instruments`, `session_skill_tier`, `leader_gender` / `vocal_floor`~`vocal_ceiling`, `leader_ment_style`, `show_capo`, `lock_past_keys`, `local_sheet_dirs`) and ask only which settings to change; preserve untouched fields.
 - Never silently overwrite an existing `user_config.json` without user confirmation.
 
 ## Step 2: Structured Church & Band Onboarding Interview
@@ -39,15 +39,16 @@ Use `ask_question` when available (or direct chat questions otherwise) in **at m
    - 악기 선택: `piano`, `synth_pad`, `acoustic_guitar`, `electric_guitar`, `bass`, `drums`
    - 보유 악기에 따라 `default_session` (`full_band` / `acoustic` / `piano_only`)과 전환 안내(`synth_pad` 없으면 `피아노 잔잔한 코드 유지`, `drums`·기타 없으면 `피아노 리드`)가 자동 맞춤 적용됩니다.
    - 숙련도: `beginner_friendly` (어려운 플랫키 회피·기타 카포 이동 보호), `intermediate`, `advanced`
-4. **인도자 보컬 · 카포 · 악보 폴더 (선택 확인)**
+4. **인도자 보컬 · 멘트 스타일 · 카포 · 악보 폴더 (선택 확인)**
    - 인도자 성별(`male`/`female`) 및 음역(`vocal_floor`~`vocal_ceiling`: 기본 남성 `A2`~`F#4`, 여성 `G3`~`D5`)
+   - 인도자용 큐시트 멘트 스타일(`--ment-style`: `short_script` 담백한 실전형 기본값 / `bullet_points` 핵심 키워드형 / `none` 생략)
    - 기타 카포 배너 표기 여부(`--show-capo` / `--no-show-capo`, 기본 `false`)
    - 과거 악보 Key 자동 고정 여부(`--lock-past-keys` / `--no-lock-past-keys`, 기본 `false`로 유동 선택 유지; 멀티트랙·브라스 등 특정 곡만 고정하려면 `manage_history.py set-repertoire --preferred-key` 사용)
    - 로컬 악보 폴더(기본 `sheet/`). 다부제·교대 인도자 교회는 주력 팀 기준 1세트를 저장하고, 예배 시 `--service-type`, `--scope`, `--session`으로 회차별 오버라이드를 사용하세요.
 
 ### What belongs in `user_config.json` vs per-setlist request
 
-- **Persisted by `init`**: `team_name`, `church_scale`, `congregation_age_group`, `vocal_ensemble`, `session_instruments`, `default_session`, `session_skill_tier`, `leader_gender`, `vocal_floor`, `vocal_ceiling`, `cooldown_weeks`, `familiar_ratio`, `seeker_emphasis`, `show_capo`, `lock_past_keys`, `local_sheet_dirs`, `default_output_dir`.
+- **Persisted by `init`**: `team_name`, `church_scale`, `congregation_age_group`, `vocal_ensemble`, `session_instruments`, `default_session`, `session_skill_tier`, `leader_gender`, `vocal_floor`, `vocal_ceiling`, `leader_ment_style`, `cooldown_weeks`, `familiar_ratio`, `seeker_emphasis`, `show_capo`, `lock_past_keys`, `local_sheet_dirs`, `default_output_dir`.
 - **Decided per service**: 이번 주 설교 본문/주제, 교회력 절기, 특정 예배만의 임시 템포·곡 수·분량·예배부(`--scope`).
 
 ## Step 3: Persist Profile (`init_profile.py --apply`)

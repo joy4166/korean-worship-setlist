@@ -18,10 +18,12 @@ from reportlab.pdfgen import canvas
 from common import (
     FONT_PATH,
     GROOVE_LABELS_KO,
+    assert_no_raw_lyrics_text,
     configure_utf8_stdio,
     json_dumps_ko,
     load_user_config,
     normalize_groove_style,
+    normalize_nfc,
     parse_key_signature,
     resolve_workspace_path,
     semitone_distance,
@@ -843,11 +845,160 @@ def build_kakao_notice(
     return "\n".join(lines)
 
 
+MENT_ANTI_PATTERNS: list[tuple[str, str, re.Pattern[str]]] = [
+    (
+        "AP-1",
+        "행사용·웅변조 호칭 금지",
+        re.compile(
+            r"(사랑하는\s*(?:성도|청년|형제|자매|예배자)?\s*여러분|오늘\s*이\s*귀하고\s*복된|은혜의\s*(?:향연|도가니|바다))",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "AP-2",
+        "번역투·소망체 상투어 금지",
+        re.compile(
+            r"(간절히\s*소망합니다|귀한\s*시간(?:이)?\s*되길|시간이\s*되었으면\s*좋겠습니다|(?:찬양|고백|나아가)\s*해\s*보도록\s*하겠습니다|찬양해보도록\s*하겠습니다)",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "AP-3",
+        "과잉 강조 부사·미사여구 남발 금지",
+        re.compile(r"(놀랍고\s*크고\s*위대|너무나도?\s*귀한|진심으로\s*간절히)", re.IGNORECASE),
+    ),
+    (
+        "AP-4",
+        "라디오 DJ식 곡 제목 소개 금지",
+        re.compile(
+            r"(다음(?:으로)?\s*(?:함께\s*)?부르실\s*(?:찬양|곡)은|이번(?:에)?\s*부르실\s*(?:찬양|곡)은|라는\s*(?:찬양|곡)인데요)",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "AP-5",
+        "회중 훈계·질책 금지",
+        re.compile(
+            r"(목소리가\s*왜\s*이렇게|입으로만\s*부르지\s*말고|입만\s*벙긋|큰\s*목소리로\s*안\s*부르)",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "AP-7",
+        "맥락 없는 추임새 강요 금지",
+        re.compile(r"(아멘이십니까|주여\s*삼창|박수\s*치면서\s*갑시다)", re.IGNORECASE),
+    ),
+]
+
+
+def validate_leader_ment(
+    ment: str | dict[str, Any] | None,
+    ment_slot: dict[str, Any] | None = None,
+    *,
+    song_title: str = "",
+) -> dict[str, str] | None:
+    """Enforce Anti-Pattern (AP-1..AP-11) hard gates and copyright bounds on a song's leader_ment."""
+    if ment is None or ment == "" or ment == {}:
+        return None
+    if isinstance(ment, str):
+        focus_point = ""
+        spoken_text = normalize_nfc(ment).strip()
+        scripture_callout = ""
+    elif isinstance(ment, dict):
+        focus_point = normalize_nfc(str(ment.get("focus_point") or "")).strip()
+        spoken_text = normalize_nfc(str(ment.get("spoken_text") or "")).strip()
+        scripture_callout = normalize_nfc(str(ment.get("scripture_callout") or "")).strip()
+    else:
+        raise ValueError(f"Unsupported leader_ment type for '{song_title}': {type(ment).__name__}")
+
+    if not focus_point and not spoken_text and not scripture_callout:
+        return None
+
+    # AP-9: never attach ment prose to segue / rhythm_reset direct transitions
+    if ment_slot and ment_slot.get("role") == "skip_direct":
+        raise ValueError(
+            f"[AP-9 위반] 직결 전환(segue/rhythm_reset) 구간인 '{song_title}'에는 인도 멘트를 넣을 수 없습니다."
+        )
+
+    # AP-8: copyright / raw-lyrics guard
+    assert_no_raw_lyrics_text(spoken_text, field_name="leader_ment.spoken_text", max_len=200)
+    assert_no_raw_lyrics_text(focus_point, field_name="leader_ment.focus_point", max_len=160)
+
+    # AP-1..AP-7 regex bans
+    for code, label, pat in MENT_ANTI_PATTERNS:
+        for text_val in (spoken_text, focus_point):
+            if not text_val:
+                continue
+            m = pat.search(text_val)
+            if m:
+                raise ValueError(f"[{code} 위반] {label}: '{m.group(0)}'")
+
+    clean_title = normalize_nfc(song_title).strip()
+    if len(clean_title) >= 3 and (f"<{clean_title}>" in spoken_text or f"〈{clean_title}〉" in spoken_text):
+        raise ValueError(f"[AP-4 위반] 라디오 DJ식 곡 제목 직접 언급 금지: '{clean_title}'")
+
+    # AP-6 / AP-10: spoken length and sentence caps tied to intro/pad slot
+    if spoken_text and ment_slot:
+        max_chars = int(ment_slot.get("max_chars") or 110)
+        if max_chars > 0 and len(spoken_text) > max_chars + 5:
+            raise ValueError(
+                f"[AP-10 위반] '{song_title}' 멘트 길이({len(spoken_text)}자)가 구간 상한({max_chars}자)을 초과했습니다."
+            )
+        sents = [s for s in re.split(r"[.!?]+(?:\s|$)", spoken_text) if s.strip()]
+        max_sents = int(ment_slot.get("max_sentences") or 2)
+        if max_sents > 0 and len(sents) > max_sents:
+            raise ValueError(
+                f"[AP-6/AP-10 위반] '{song_title}' 멘트 문장 수({len(sents)}문장)가 허용 상한({max_sents}문장)을 초과했습니다."
+            )
+
+    return {
+        "focus_point": focus_point,
+        "spoken_text": spoken_text,
+        "scripture_callout": scripture_callout,
+    }
+
+
+def _render_ment_lines(
+    norm_ment: dict[str, str] | None,
+    mslot: dict[str, Any] | None,
+    eff_ment_style: str,
+) -> list[str]:
+    """Format validated leader ment or stage timing lines for Markdown leader_cuesheet."""
+    if eff_ment_style == "none":
+        return []
+    out: list[str] = []
+    if mslot and mslot.get("role") == "skip_direct":
+        out.append(f"- **인도 멘트**: {mslot.get('timing_cue', '[멘트 생략 — 음악으로 바로 연결]')}")
+        return out
+    if norm_ment:
+        tcue = f" ({mslot['timing_cue']})" if mslot and mslot.get("timing_cue") else ""
+        sc_suffix = f" *(낭독/참조: {norm_ment['scripture_callout']})*" if norm_ment["scripture_callout"] else ""
+        if eff_ment_style == "bullet_points":
+            pt = norm_ment["focus_point"] or norm_ment["spoken_text"]
+            out.append(f"- **인도 포인트**{tcue}: {pt}{sc_suffix}")
+        else:
+            if norm_ment["focus_point"]:
+                out.append(f"- **인도 포인트**{tcue}: {norm_ment['focus_point']}")
+            if norm_ment["spoken_text"]:
+                cue_inline = "" if norm_ment["focus_point"] else tcue
+                out.append(f"- **예시 멘트**{cue_inline}: \"{norm_ment['spoken_text']}\"{sc_suffix}")
+    elif mslot and mslot.get("timing_cue"):
+        out.append(f"- **인도 타이밍**: {mslot['timing_cue']}")
+    return out
+
+
 def build_leader_cuesheet_md(
     setlist_plan: dict[str, Any],
     candidates_data: dict[str, Any] | None = None,
     session_instruments: list[str] | None = None,
+    ment_style: str | None = None,
 ) -> str:
+    eff_ment_style = str(
+        ment_style
+        or setlist_plan.get("leader_ment_style")
+        or load_user_config().get("leader_ment_style")
+        or "short_script"
+    )
     plan_b_map: dict[int, list[dict[str, Any]]] = {}
     if candidates_data:
         for sl in candidates_data.get("pre_sermon", []):
@@ -874,6 +1025,12 @@ def build_leader_cuesheet_md(
 
     for song in songs:
         idx = int(song["slot_index"])
+        mslot = song.get("ment_slot")
+        norm_ment = validate_leader_ment(
+            song.get("leader_ment"),
+            mslot,
+            song_title=str(song.get("title_ko") or ""),
+        )
         meter_str = _format_meter_with_groove(song)
         if song.get("meter_note"):
             meter_str += f" — ⚠ {song['meter_note']}"
@@ -887,6 +1044,7 @@ def build_leader_cuesheet_md(
         end_field = f" | **전환**: `{tr['transition_mode']}`" if tr else f" | **엔딩**: {end_kr}"
         lines.append(f"- **곡 진행**: `{format_song_form_visual(song.get('song_form', ''), tr_mode, session_instruments=session_instruments)}`{end_field}")
         lines.append(f"- **신학적 핵심 / 선정 이유**: {song.get('theological_core', '')}")
+        lines.extend(_render_ment_lines(norm_ment, mslot, eff_ment_style))
         if song.get("ensemble_note"):
             lines.append(f"- **합주·진행 메모**: {song['ensemble_note']}")
         if song.get("caution_nuance"):
@@ -903,11 +1061,15 @@ def build_leader_cuesheet_md(
         lines.append("")
 
     post = setlist_plan.get("post_sermon") or {}
+    post_slot = post.get("ment_slot")
+    post_ment = validate_leader_ment(post.get("leader_ment"), post_slot, song_title="말씀 후 결단")
     lines.append("## Block B: 말씀 후 결단 · 기도회")
     rep = post.get("reprise_candidate")
     loop_key = rep["target_key"] if rep and rep.get("target_key") else (songs[-1]["target_key"] if songs else "G")
     if rep:
         lines.append(f"- **Reprise 추천**: {rep['title_ko']} (`{rep['target_key']} Key`) — `{format_song_form_visual(rep.get('song_form', ''), session_instruments=session_instruments)}`")
+    if post_ment:
+        lines.extend(_render_ment_lines(post_ment, post_slot, eff_ment_style))
     raw_loops = post.get("prayer_chord_loops", [])
     realized = " | ".join(realize_roman_progression(lp, loop_key) for lp in raw_loops)
     lines.append(f"- **기도회 코드 루프 ({loop_key} Key)**: {realized}")
@@ -1034,11 +1196,26 @@ def generate_setlist_package(
 
     cfg = user_config if user_config is not None else load_user_config()
     eff_show_capo = bool(cfg.get("show_capo", False)) if show_capo is None else bool(show_capo)
+    eff_ment_style = str(
+        setlist_plan.get("leader_ment_style")
+        or cfg.get("leader_ment_style")
+        or "short_script"
+    )
     inst_list = (
         setlist_plan.get("session_instruments")
         if setlist_plan.get("session_instruments") is not None
         else cfg.get("session_instruments")
     )
+
+    songs = setlist_plan.get("songs", [])
+    post = setlist_plan.get("post_sermon") or {}
+    for song in songs:
+        validate_leader_ment(
+            song.get("leader_ment"),
+            song.get("ment_slot"),
+            song_title=str(song.get("title_ko") or ""),
+        )
+    validate_leader_ment(post.get("leader_ment"), post.get("ment_slot"), song_title="말씀 후 결단")
 
     output_dir.mkdir(parents=True, exist_ok=True)
     sheets_out_dir = output_dir / "sheets"
@@ -1048,9 +1225,7 @@ def generate_setlist_package(
     old_snapshot = json.loads(snapshot_path.read_text(encoding="utf-8")) if snapshot_path.exists() else None
 
     matched_by_slot = {int(s["slot_index"]): s for s in matched_sheets.get("sheets", [])}
-    songs = setlist_plan.get("songs", [])
     tr_by_slot = _index_transitions_by_slot(setlist_plan)
-    post = setlist_plan.get("post_sermon") or {}
     rep_cand = post.get("reprise_candidate")
 
     # 1. Cover page PNG
@@ -1157,7 +1332,12 @@ def generate_setlist_package(
 
     leader_md_path = output_dir / "leader_cuesheet.md"
     leader_md_path.write_text(
-        build_leader_cuesheet_md(setlist_plan, candidates_data, session_instruments=inst_list),
+        build_leader_cuesheet_md(
+            setlist_plan,
+            candidates_data,
+            session_instruments=inst_list,
+            ment_style=eff_ment_style,
+        ),
         encoding="utf-8",
     )
 

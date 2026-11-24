@@ -7,7 +7,7 @@ description: >-
   setlist history or 6-week cooldowns (history, 쿨타임, 신곡 정착), or verifying,
   transposing, and stamping worship sheet music.
 metadata:
-  version: "0.1.3"
+  version: "0.1.4"
 ---
 
 # Korean Worship Setlist (`korean-worship-setlist`)
@@ -56,6 +56,7 @@ metadata:
 - 예배 유형·교회력 절기·단일 슬롯(`--slot`): [worship_presets.md](./references/worship_presets.md)
 - 전조 공식·박자/BPM 전환·카포 가이드: [key_transition_guide.md](./references/key_transition_guide.md)
 - 송폼 규격·PPT 한글 변환·비전 검수 체크리스트: [song_form_conventions.md](./references/song_form_conventions.md)
+- 찬양 인도 멘트 작성·Anti-Pattern 가이드: [leader_ment_guide.md](./references/leader_ment_guide.md)
 
 ---
 
@@ -77,10 +78,11 @@ metadata:
   --input candidates.json --output setlist_plan.json
 ```
 - `user_config.json`의 `session_skill_tier`, `session_instruments`, `vocal_ceiling`을 자동 읽어 보컬 음역 상한을 넘지 않는 선에서 `V7sus4 (IV/V)`·`IVm6`·`V/IV` 브릿지 코드와 `segue`/`pad_break` 큐를 설계합니다.
+- **인도 멘트 슬롯(`ment_slot`) & 작성**: `plan_transitions.py`가 전주 마디·전환 모드에 맞춰 슬롯별 `ment_slot` 제약을 자동 생성합니다. `leader_ment_style != "none"`일 때는 [leader_ment_guide.md](./references/leader_ment_guide.md)를 읽고 `ment_slot.allowed: true`인 슬롯(및 `post_sermon`)에만 `leader_ment`(`focus_point`, `spoken_text`, `scripture_callout`)를 채우세요(`skip_direct` 구간은 빈 값 유지 — `stamp_sheets.py`가 `AP-1`~`AP-11` 하드 게이트를 검증합니다).
 
 ### 4단계: 콘티 초안 사용자 컨펌 (<HARD-GATE>)
 **사용자 확정 전 5~6단계(PDF 스탬핑·`manage_history.py record`)로 진행하지 마세요.** 아래 3개 블록 형식으로 초안을 제시하고 응답을 기다립니다:
-1. **Block A (`pre_sermon`) 요약표**: `순번 | 곡명 | 실연 Key (원키 대비 이조) | BPM·박자 | 추천 송폼 | 전조 브릿지·세션 큐`
+1. **Block A (`pre_sermon`) 요약표**: `순번 | 곡명 | 실연 Key (원키 대비 이조) | BPM·박자 | 추천 송폼 | 전조 브릿지·세션 큐` (그리고 `leader_ment_style != "none"`일 때 `ment_slot.allowed: true` 구간의 1줄 멘트/연결 포인트 요약 병기)
 2. **Block B (`post_sermon`)**: 1순위 `Reprise` 곡·구간 또는 결단송 + 기도회 코드 루프
 3. **슬롯별 Plan B**: 각 슬롯 대체 후보 1~2곡
 
@@ -137,6 +139,7 @@ metadata:
 - 4단계 사용자 초안 컨펌 전에 5~6단계(PDF 병합·`manage_history.py record`)를 한 번에 끝내려 할 때
 - `fetch_sheets.py` 대신 `Invoke-WebRequest`/`curl`로 블로그 이미지를 받거나 유료/워터마크 악보를 넣으려 할 때
 - 악보에서 읽은 15자 초과 가사 원문을 DB·JSON·큐시트·채팅 응답에 적으려 할 때
+- `segue`/`rhythm_reset`(`skip_direct`) 구간에 인도 멘트를 넣거나 `"사랑하는 여러분"`, `"~하길 간절히 소망합니다"`, 라디오 DJ식 곡 소개 등 AI 상투어를 사용하려 할 때
 
 ## 합리화 차단표 (Rationalization Table)
 

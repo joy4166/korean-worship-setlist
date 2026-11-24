@@ -27,6 +27,7 @@ from manage_history import SHEET_EXTENSIONS, bootstrap_repertoire
 CHURCH_SCALE_CHOICES = ("small", "medium", "large")
 AGE_GROUP_CHOICES = ("youth_young_adult", "intergenerational", "senior_adult")
 VOCAL_ENSEMBLE_CHOICES = ("solo_leader", "small_team", "full_choir")
+LEADER_MENT_STYLE_CHOICES = ("short_script", "bullet_points", "none")
 INSTRUMENT_CHOICES = (
     "piano",
     "synth_pad",
@@ -131,6 +132,7 @@ def apply_profile(
     familiar_ratio: float | None = None,
     show_capo: bool | None = None,
     lock_past_keys: bool | None = None,
+    leader_ment_style: str | None = None,
     sheet_dirs: list[str] | None = None,
     output_dir: str | None = None,
     config_path: Path | None = None,
@@ -207,6 +209,12 @@ def apply_profile(
         base["show_capo"] = bool(show_capo)
     if lock_past_keys is not None:
         base["lock_past_keys"] = bool(lock_past_keys)
+    if leader_ment_style is not None:
+        if leader_ment_style not in LEADER_MENT_STYLE_CHOICES:
+            raise ValueError(f"Unsupported leader_ment_style: {leader_ment_style}")
+        base["leader_ment_style"] = leader_ment_style
+    elif not cfg_path.exists() and "leader_ment_style" not in base:
+        base["leader_ment_style"] = "short_script"
 
     if sheet_dirs is not None:
         base["local_sheet_dirs"] = [str(Path(p)).replace("\\", "/") for p in sheet_dirs if p.strip()]
@@ -281,6 +289,12 @@ def main() -> None:
     parser.add_argument("--no-show-capo", dest="show_capo", action="store_false")
     parser.add_argument("--lock-past-keys", action="store_true", default=None)
     parser.add_argument("--no-lock-past-keys", dest="lock_past_keys", action="store_false")
+    parser.add_argument(
+        "--ment-style",
+        choices=LEADER_MENT_STYLE_CHOICES,
+        default=None,
+        help="Leader ment output mode in leader_cuesheet.md (short_script | bullet_points | none)",
+    )
     parser.add_argument("--config-path", type=Path, default=None)
     parser.add_argument("--worship-db", type=Path, default=WORSHIP_DB_PATH)
     parser.add_argument("--local-db", type=Path, default=None)
@@ -310,6 +324,7 @@ def main() -> None:
             familiar_ratio=args.familiar_ratio,
             show_capo=args.show_capo,
             lock_past_keys=args.lock_past_keys,
+            leader_ment_style=args.ment_style,
             sheet_dirs=args.sheet_dir,
             output_dir=args.output_dir,
             config_path=args.config_path,

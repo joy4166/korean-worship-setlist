@@ -365,6 +365,112 @@ def evaluate_transition(
     }
 
 
+def _extract_intro_bars(song_form: str | None) -> int:
+    """Parse intro bar count like 'I(8m)' -> 8 (default 4)."""
+    if not song_form:
+        return 4
+    m = re.search(r"\bI\s*\(\s*(\d+)\s*m\s*\)", str(song_form), re.IGNORECASE)
+    return int(m.group(1)) if m else 4
+
+
+def _resolve_tone_register(service_type: str | None) -> str:
+    """Resolve liturgical spoken register matching service_type."""
+    if service_type == "sunday_main":
+        return "formal_reverent"
+    if service_type == "small_group":
+        return "calm_devotional"
+    return "warm_declaratory"
+
+
+def populate_ment_slots(
+    songs: list[dict[str, Any]],
+    transitions: list[dict[str, Any]],
+    post_sermon: dict[str, Any] | None = None,
+    *,
+    service_type: str = "youth",
+    session_instruments: list[str] | None = None,
+    ment_style: str = "short_script",
+) -> None:
+    """Attach physical timing ment_slot specs and strip stale leader_ment on segue/rhythm_reset."""
+    has_inst_cfg = isinstance(session_instruments, list) and len(session_instruments) > 0
+    has_pad = (not has_inst_cfg) or ("synth_pad" in session_instruments)
+    reg = _resolve_tone_register(service_type)
+    tr_by_to = {
+        int(tr["to_slot"]): tr
+        for tr in transitions
+        if tr.get("to_slot") is not None
+    }
+
+    for idx, song in enumerate(songs):
+        slot_idx = int(song.get("slot_index", idx + 1))
+        if idx == 0:
+            bars = _extract_intro_bars(song.get("song_form"))
+            max_chars = 35 if bars <= 2 else (75 if bars >= 8 else 55)
+            song["ment_slot"] = {
+                "role": "opening_call",
+                "allowed": ment_style != "none",
+                "max_chars": max_chars,
+                "max_sentences": 1,
+                "timing_cue": f"전주 I({bars}m) 코드 위 1문장 초청 후 1절 진입",
+                "tone_register": reg,
+                "focus_hint": song.get("theological_core", ""),
+            }
+            continue
+
+        tr = tr_by_to.get(slot_idx) or (transitions[idx - 1] if idx - 1 < len(transitions) else None)
+        mode = tr.get("transition_mode") if tr else "pad_break"
+        if mode in ("segue", "rhythm_reset"):
+            cue = (
+                "[멘트 생략 — 음악으로 바로 연결]"
+                if mode == "segue"
+                else "[멘트 생략 — 앞곡 정박 엔딩 후 4박 카운트 직결]"
+            )
+            song["ment_slot"] = {
+                "role": "skip_direct",
+                "allowed": False,
+                "max_chars": 0,
+                "max_sentences": 0,
+                "timing_cue": cue,
+                "tone_register": reg,
+            }
+            song.pop("leader_ment", None)
+        else:
+            prev_tier = songs[idx - 1].get("tempo_tier")
+            if prev_tier == "ballad":
+                hold_cue = (
+                    "앞곡 여운 1~2마디 침묵(Selah) 후 건반 패드 위 차분히 진입"
+                    if has_pad
+                    else "앞곡 여운 1~2마디 침묵(Selah) 후 피아노 잔잔한 코드 위 진입"
+                )
+            else:
+                hold_cue = (
+                    "건반 패드 유지 위 호흡 정리 후 진입"
+                    if has_pad
+                    else "피아노 잔잔한 코드 유지 위 호흡 정리 후 진입"
+                )
+            refs = song.get("scripture_refs") or []
+            song["ment_slot"] = {
+                "role": "pad_bridge",
+                "allowed": ment_style != "none",
+                "max_chars": 110,
+                "max_sentences": 2,
+                "timing_cue": hold_cue,
+                "tone_register": reg,
+                "bridge_formula": "1문장(삶/앞곡 고백 수용) + 1문장(다음 곡 핵심 단어 초청)",
+                "suggested_scripture": refs[0] if refs else None,
+            }
+
+    if isinstance(post_sermon, dict):
+        post_sermon["ment_slot"] = {
+            "role": "reprise_prayer",
+            "allowed": ment_style != "none",
+            "max_chars": 90,
+            "max_sentences": 2,
+            "timing_cue": "설교 직후 반주 위 후렴 진입 1마디 + 찬양 후 기도회 전환 1문장",
+            "tone_register": reg,
+        }
+
+
 def plan_setlist_transitions(
     candidates_data: dict[str, Any],
     skill_tier: str | None = None,
@@ -456,8 +562,19 @@ def plan_setlist_transitions(
             rep["capo_info"] = matched_song.get("capo_info")
             rep["transposition_reason"] = matched_song.get("transposition_reason")
 
+    ment_style = str(cfg.get("leader_ment_style") or "short_script")
+    svc_type = candidates_data.get("service_type", "youth")
+    populate_ment_slots(
+        chosen_songs,
+        transitions,
+        post_sermon,
+        service_type=svc_type,
+        session_instruments=inst_list,
+        ment_style=ment_style,
+    )
+
     return {
-        "service_type": candidates_data.get("service_type", "youth"),
+        "service_type": svc_type,
         "church_season": candidates_data.get("church_season", "ordinary"),
         "cooldown_scope": candidates_data.get("cooldown_scope"),
         "service_date": candidates_data.get("reference_date"),
@@ -468,6 +585,7 @@ def plan_setlist_transitions(
         "session_skill_tier": tier,
         "session_instruments": inst_list,
         "vocal_ensemble": cfg.get("vocal_ensemble", "small_team"),
+        "leader_ment_style": ment_style,
         "songs": chosen_songs,
         "transitions": transitions,
         "post_sermon": post_sermon,
